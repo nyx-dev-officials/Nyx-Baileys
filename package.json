@@ -1,0 +1,63 @@
+{
+  "name": "super-baileys",
+  "version": "0.1.0",
+  "description": "Hyper-modular WhatsApp client framework — upstream Baileys engine, decorated at runtime. No node_modules edits.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./core/*": "./dist/core/*.js",
+    "./plugins/*": "./dist/plugins/*.js",
+    "./utils/*": "./dist/utils/*.js",
+    "./adapters": "./dist/adapters/index.js",
+    "./adapters/*": "./dist/adapters/*.js",
+    "./multi": "./dist/multi/index.js",
+    "./multi/*": "./dist/multi/*.js",
+    "./security": "./dist/security/index.js",
+    "./cli": "./dist/cli/index.js",
+    "./cli/*": "./dist/cli/*.js"
+  },
+  "bin": {
+    "super-baileys": "./bin/super-baileys.js"
+  },
+  "files": ["dist", "README.md", "docs"],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "check": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test ./tests/*.test.js",
+    "demo": "node dist/index.js",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "prepublishOnly": "npm run clean && npm run build"
+  },
+  "keywords": [
+    "whatsapp",
+    "baileys",
+    "baileys-fork",
+    "multi-device",
+    "native-flow",
+    "anti-spam"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.9.2"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^7.0.0-rc.14"
+  },
+  "peerDependencies": {
+    "@whiskeysockets/baileys": ">=7.0.0-rc.14"
+  },
+  "peerDependenciesMeta": {
+    "@whiskeysockets/baileys": {
+      "optional": false
+    }
+  }
+}

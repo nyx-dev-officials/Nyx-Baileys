@@ -1,0 +1,49 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# ── Credentials and live session state ────────────────────────────────
+# A paired WhatsApp session. Committing this hands anyone with repo access a
+# working login to the linked number, and pushing it is a permanent leak —
+# git history does not forget.
+session/
+sessions/
+.super-baileys-tmp/
+creds.json
+app-state-sync-key-*.json
+pre-key-*.json
+*.env
+.env
+.env.*
+!.env.example
+
+# Anti-delete cache and other generated state
+revoked-cache.json
+store.json
+
+# ── Third-party source checkouts ─────────────────────────────────────
+# Cloned forks kept locally for reference. Not ours to redistribute.
+refs/
+
+# CLI local state
+.super-baileys/
+
+# Logs and scratch
+*.log
+npm-debug.log*
+tmp/
+.cache/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# Test + coverage
+coverage/
+.nyc_output/
