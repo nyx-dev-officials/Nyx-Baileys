@@ -100,7 +100,8 @@ That is **~95% faster and ~79% lighter** for a script that never opens a socket.
 The other cost is per-message work on `messages.upsert`. Profiling 100k messages
 across 500 chats showed the chain spending its time on **garbage**, not on
 logic — three allocations per message, each costing more than the work around
-it:
+it. The worst of them was a `sweep()` per *message* that walked every chat on a
+500-chat deployment:
 
 - **memory GC** enforced the per-chat cap by allocating a fresh array on every
   message past the cap. The allocation, not the copy, was the cost: 1.05 µs per
@@ -115,13 +116,18 @@ it:
 
 | | Before | After |
 |---|---|---|
-| Default chain, per message | 1.44 µs | **~0.36 µs** |
+| Default chain, per message | ~16.0 µs | **~0.61 µs** |
 
-That is **~75% less overhead per inbound message**. Run either bench yourself:
+That is **~96% less overhead per inbound message** (~26x). The two figures were
+measured back to back, same machine, same load — which matters, because the
+absolute number on a shared box drifts by nearly 2x. Compare ratios, not
+single readings.
+
+Run either bench yourself:
 
 ```bash
-npm run bench -- 100000 500        # chain overhead, best of 7 trials
-node --expose-gc bench/plugin-profile.mjs 100000 500   # which plugin costs what
+npm run bench -- 100000 500                    # chain overhead, best of 7 trials
+npm run bench:plugins -- 100000 500            # which plugin costs what
 ```
 
 Both report the **minimum across trials** with a forced GC between them, and
