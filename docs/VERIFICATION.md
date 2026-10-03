@@ -529,3 +529,72 @@ The ten opt-in feature plugins and the integrations layer were unreachable from
 the package root — there was no barrel and no `./integrations` subpath, so
 `dist/` was the only way in. Both are now exported from the root and covered by
 a `./integrations` export map entry.
+
+---
+
+## 6. Performance and feature pass — 2026-10-03
+
+Verified from a **clean clone** of `main`, not the working tree, so an untracked
+file cannot be what makes it pass.
+
+| Step | Command | Exit | Result |
+|---|---|---|---|
+| Clone + type check | `npm run check` | 0 | clean |
+| Build | `npm run build` | 0 | emits to `dist/` |
+| Full suite | `npm test` | 0 | **538 tests, 538 pass, 0 fail** |
+| `lite` engine guard | `node --test tests/lite.test.js` | 0 | 5/5 |
+| Chain overhead | `npm run bench -- 100000 500 9` | 0 | 0.60 µs/message |
+| Per-plugin attribution | `npm run bench:plugins -- 100000 500` | 0 | whole chain 0.43 µs/message |
+| Export map targets | resolve every non-wildcard entry | 0 | all present |
+
+### Measured result
+
+| | Before | After |
+|---|---|---|
+| Default chain, per inbound message | ~16.0 µs | **~0.61 µs** (~26x, ~96%) |
+| `nyx-baileys` root import | 931 ms / 26.2 MB / 600 exports | — |
+| `nyx-baileys/lite` import | — | **48 ms / 5.4 MB / 148 exports** |
+
+Both figures were measured back to back on the same machine with the same
+command. That matters: an earlier "1.44 µs baseline" in this repository was
+invalid, because it was taken against a tree that already carried the
+sweep-per-batch fix, so it priced only the slice-to-shift change. Absolute
+readings on this box drift by nearly 2x — compare ratios, never a single sample.
+
+### Why it was slow
+
+Three allocations per inbound message, each costing more than the work around
+it:
+
+| Site | Cost | Cause | Fix |
+|---|---|---|---|
+| `plugins/memory` | 1.235 µs | fresh array per message to enforce the per-chat cap; the allocation, not the copy, was the cost | `shift()` in place; O(chats) sweep left the upsert path |
+| `core/clock` | 0.212 µs | `{rtt, skew}` object per sample plus a window memmove per push | fixed-capacity `Float64Array` ring |
+| `core/media` | 0.139 µs | seven media-field probes per message; seven *misses* on a megamorphic shape | walk the keys present, resolve priority by rank |
+
+### Defects found by the new tests
+
+- **Prototype pollution.** `JsonStore.set('__proto__', …)` hit the prototype
+  setter instead of storing data. Keys here are jids and usernames, so the input
+  is attacker-influenced. Now defined with `Object.defineProperty`.
+- **`dispose()` re-wrote after sealing**, so "disposed means nothing more is
+  persisted" held only until someone disposed twice. Now idempotent.
+- **Cron day-skipping skipped past valid times.** The search asked the *full*
+  matcher "is there a slot on this day?", which also tested minute and hour, so a
+  day with a 14:30 slot read as uninteresting at 10:16 and every schedule
+  eventually returned `null`. Split into `dayMatches`.
+- **A second `parseArgs` would have silently shadowed** the existing one from
+  `utils/args.ts` at the package root. Renamed to `parseCommandArgs`.
+- **`'.'` and `'` quoting.** Treating `'` as a quote opener turns `it's fine`
+  into the single argument `its fine` — the wrong trade for something that
+  parses prose.
+
+### Known limitations
+
+- No live paired account: every socket-dependent behaviour is unit-tested
+  against fakes. Real WhatsApp semantics are unverified.
+- The ~26 MB root import is upstream protobufjs and libsignal. It cannot be
+  trimmed while the root re-exports `* from '@whiskeysockets/baileys'`; only the
+  `lite` entry avoids it. A `nyx-baileys/plugins` entry — engine but not
+  adapters/multi/security/integrations — is the next structural lever.
+- Bench absolute values drift ~2x on a shared machine; only the ratio is stable.
