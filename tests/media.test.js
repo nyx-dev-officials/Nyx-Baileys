@@ -97,6 +97,49 @@ test('firstMedia skips a null media field rather than returning it', () => {
   assert.equal(firstMedia(msg).mimetype, 'video/mp4');
 });
 
+/*
+ * `firstMedia` walks the keys the message has and resolves priority through a
+ * switch (`mediaRankOf`) instead of probing all seven fields. The two lists have
+ * to agree, and nothing about the code makes them agree — so pin it: present
+ * one media field at a time, with every higher-priority field present but null,
+ * and confirm the right one wins. Reordering either list fails here.
+ */
+test('the field walk resolves priority in exactly MEDIA_KEYS order', () => {
+  for (let i = 0; i < MEDIA_KEYS.length; i += 1) {
+    const winner = MEDIA_KEYS[i];
+    const message = {};
+    for (let j = 0; j < i; j += 1) message[MEDIA_KEYS[j]] = null;
+    message[winner] = { mimetype: 'application/octet-stream' };
+    // Lower-priority fields present too, so "first key in the object" cannot win.
+    for (let j = i + 1; j < MEDIA_KEYS.length; j += 1) {
+      message[MEDIA_KEYS[j]] = { mimetype: 'text/should-not-win' };
+    }
+
+    const msg = wmMessage({ message });
+    assert.equal(mediaKeyOf(msg), winner, `${winner}: wrong key reported`);
+    assert.equal(firstMedia(msg).mimetype, 'application/octet-stream', `${winner}: wrong payload`);
+  }
+});
+
+test('the field walk is insensitive to key insertion order', () => {
+  // Reverse insertion, so every media field is discovered after the ones that
+  // outrank it.
+  const message = {};
+  for (const key of [...MEDIA_KEYS].reverse()) message[key] = { mimetype: 'x' };
+
+  const msg = wmMessage({ message });
+  assert.equal(mediaKeyOf(msg), 'imageMessage');
+  assert.equal(firstMedia(msg).mimetype, 'x');
+});
+
+test('a non-media field that merely shares a prefix is not mistaken for media', () => {
+  const msg = wmMessage({
+    message: { imageMessageStatusLike: { mimetype: 'image/jpeg' }, conversation: 'hi' },
+  });
+  assert.equal(mediaKeyOf(msg), null);
+  assert.equal(firstMedia(msg), null);
+});
+
 /* ── contextOf / associationOf ───────────────────────────────────────── */
 
 test('contextOf prefers the media field contextInfo over the root one', () => {

@@ -47,6 +47,27 @@ const median = (values: readonly number[]): number => {
   return sorted[mid] ?? 0;
 };
 
+/**
+ * Median over a fixed-capacity ring buffer, via a reused scratch array.
+ *
+ * `skewMs()` runs on the send path, so it must not allocate. The ring is read
+ * in order into `scratch`, sorted in place, and the median taken from it — one
+ * allocation for the lifetime of the estimator rather than one per call.
+ */
+const ringMedian = (
+  ring: Float64Array,
+  filled: number,
+  scratch: number[],
+): number => {
+  if (filled === 0) return 0;
+  scratch.length = filled;
+  for (let i = 0; i < filled; i += 1) scratch[i] = ring[i] ?? 0;
+  scratch.sort((a, b) => a - b);
+  const mid = Math.floor(filled / 2);
+  if (filled % 2 === 0) return ((scratch[mid - 1] ?? 0) + (scratch[mid] ?? 0)) / 2;
+  return scratch[mid] ?? 0;
+};
+
 const standardDeviation = (values: readonly number[]): number => {
   if (values.length === 0) return 0;
   const mean = values.reduce((sum, v) => sum + v, 0) / values.length;
@@ -58,12 +79,27 @@ const standardDeviation = (values: readonly number[]): number => {
 export class ClockSync {
   readonly #window: number;
   readonly #min: number;
-  #samples: Array<{ rtt: number; skew: number }> = [];
+  /** Fixed-capacity skew ring. Never grows, never reallocates. */
+  readonly #skew: Float64Array;
+  /** Fixed-capacity round-trip ring, parallel to `#skew`. */
+  readonly #rtt: Float64Array;
+  /** Next write position in the rings. */
+  #cursor = 0;
+  /** Live entries, capped at the window. */
+  #filled = 0;
+  /** Reused by `skewMs()` so the estimator allocates nothing per call. */
+  readonly #scratch: number[] = [];
+  /** Second scratch, for `stats()` — it reports two medians at once. */
+  readonly #scratch2: number[] = [];
   #lastUpdatedAt = 0;
 
   constructor(options: ClockSyncOptions = {}) {
-    this.#window = options.sampleWindowSize ?? 10;
+    // A window of 0 or less would make the ring cursor divide by zero and the
+    // window trivially empty. Clamp to 1 so the class is total.
+    this.#window = Math.max(1, options.sampleWindowSize ?? 10);
     this.#min = options.minSamples ?? 3;
+    this.#skew = new Float64Array(this.#window);
+    this.#rtt = new Float64Array(this.#window);
   }
 
   /**
@@ -73,15 +109,36 @@ export class ClockSync {
   record(sample: ClockSample): void {
     const rtt = Math.max(0, sample.localReceivedAt - sample.localSentAt);
     const midpoint = sample.localSentAt + rtt / 2;
-    this.#samples.push({ rtt, skew: sample.serverTimestamp - midpoint });
-    if (this.#samples.length > this.#window) this.#samples.shift();
-    this.#lastUpdatedAt = Date.now();
+    this.#push(rtt, sample.serverTimestamp - midpoint);
+  }
+
+  /**
+   * Record a one-way sample: a server timestamp observed at local time `at`.
+   *
+   * This is the path the inbound plugin takes, once per message, so it exists
+   * to avoid building a `ClockSample` object per message. With a one-way
+   * sample the round trip is zero, the midpoint is `at`, and the skew is just
+   * the distance between the two clocks.
+   */
+  recordServerTimestamp(serverTimestampMs: number, at = Date.now()): void {
+    this.#push(0, serverTimestampMs - at, at);
+  }
+
+  #push(rtt: number, skew: number, at = Date.now()): void {
+    // Ring, not push/shift: a bounded window makes `shift()` a memmove on every
+    // sample and allocates one `{rtt, skew}` object per sample — both pure waste
+    // on a path that runs once per inbound message.
+    this.#skew[this.#cursor] = skew;
+    this.#rtt[this.#cursor] = rtt;
+    this.#cursor = (this.#cursor + 1) % this.#window;
+    if (this.#filled < this.#window) this.#filled += 1;
+    this.#lastUpdatedAt = at;
   }
 
   /** Estimated skew in ms. Negative means local is ahead. */
   skewMs(): number {
-    if (this.#samples.length < this.#min) return 0;
-    return median(this.#samples.map((s) => s.skew));
+    if (this.#filled < this.#min) return 0;
+    return ringMedian(this.#skew, this.#filled, this.#scratch);
   }
 
   /** Local ms → server-aligned ms. */
@@ -95,18 +152,18 @@ export class ClockSync {
   }
 
   stats(): ClockSyncStats {
-    const count = this.#samples.length;
-    const skews = this.#samples.map((s) => s.skew);
-    const rtts = this.#samples.map((s) => s.rtt);
+    const count = this.#filled;
 
     let confidence: ClockSyncStats['confidence'] = 'low';
     if (count >= this.#min) {
+      const skews: number[] = [];
+      for (let i = 0; i < count; i += 1) skews.push(this.#skew[i] ?? 0);
       confidence = count >= 10 && standardDeviation(skews) < 500 ? 'high' : 'medium';
     }
 
     return {
-      skewMs: count >= this.#min ? median(skews) : 0,
-      estimatedRttMs: median(rtts),
+      skewMs: count >= this.#min ? ringMedian(this.#skew, count, this.#scratch) : 0,
+      estimatedRttMs: ringMedian(this.#rtt, count, this.#scratch2),
       sampleCount: count,
       confidence,
       lastUpdatedAt: this.#lastUpdatedAt,
@@ -114,11 +171,15 @@ export class ClockSync {
   }
 
   reset(): void {
-    this.#samples = [];
+    this.#skew.fill(0);
+    this.#rtt.fill(0);
+    this.#cursor = 0;
+    this.#filled = 0;
     this.#lastUpdatedAt = 0;
   }
 
+  /** Live samples, capped at the window — not the lifetime total. */
   get sampleCount(): number {
-    return this.#samples.length;
+    return this.#filled;
   }
 }

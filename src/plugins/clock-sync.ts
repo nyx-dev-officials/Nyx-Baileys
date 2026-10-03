@@ -1,5 +1,6 @@
 import { ClockSync, type ClockSample, type ClockSyncOptions } from '../core/clock.js';
 
+
 import type { WAMessage } from '@whiskeysockets/baileys';
 import type { Plugin } from '../utils/types.js';
 
@@ -31,12 +32,9 @@ export function clockSync(options: ClockSyncOptions = {}): Plugin {
         for (const msg of event.messages ?? []) {
           const seconds = Number(msg.messageTimestamp);
           if (!Number.isFinite(seconds) || seconds <= 0) continue;
-          const sample: ClockSample = {
-            localSentAt: receivedAt,
-            localReceivedAt: receivedAt,
-            serverTimestamp: seconds * 1000,
-          };
-          clock.record(sample);
+          // One-way sample, straight into the ring — no intermediate
+          // `ClockSample` object per message on the inbound hot path.
+          clock.recordServerTimestamp(seconds * 1000, receivedAt);
         }
       });
 
