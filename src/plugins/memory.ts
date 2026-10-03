@@ -101,6 +101,7 @@ export function memoryGc(options: MemoryGcOptions = {}): Plugin {
       };
 
       ctx.sock.ev.on('messages.upsert', (event: { messages: WAMessage[] }) => {
+        let dirty = false;
         for (const msg of event.messages ?? []) {
           const jid = msg.key?.remoteJid;
           const id = msg.key?.id;
@@ -113,11 +114,23 @@ export function memoryGc(options: MemoryGcOptions = {}): Plugin {
           // Status posts ride the same upsert channel; count them separately
           // so they never crowd real chat history out of the window. rc14's
           // IMessage has no dedicated status field, so match on the wire key.
-          const kind = msg.message ? Object.keys(msg.message).find((k) => k.startsWith('status')) : undefined;
-          if (kind) statuses.push(Number(msg.messageTimestamp ?? Date.now()));
-
-          sweep();
+          // `for…in` with an early break avoids allocating a key array for
+          // every message, which is the common case for ordinary chat.
+          if (msg.message) {
+            for (const key in msg.message) {
+              if (key.startsWith('status')) {
+                statuses.push(Number(msg.messageTimestamp ?? Date.now()));
+                break;
+              }
+            }
+          }
+          dirty = true;
         }
+
+        // One sweep per batch, not one per message. Each sweep walks every chat,
+        // so sweeping inside the loop made a 100-message batch do 100 full passes
+        // over the whole history map.
+        if (dirty) sweep();
       });
 
       const timer = setInterval(sweep, interval);

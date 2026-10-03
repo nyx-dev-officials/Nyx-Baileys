@@ -10,6 +10,11 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./lite": {
+      "types": "./dist/lite.d.ts",
+      "import": "./dist/lite.js"
+    },
+    "./lite/*": "./dist/*.js",
     "./package.json": "./package.json",
     "./core/*": "./dist/core/*.js",
     "./plugins/*": "./dist/plugins/*.js",
@@ -45,6 +50,7 @@
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "node --test ./tests/*.test.js",
     "demo": "node dist/index.js",
+    "bench": "node bench/message-throughput.mjs",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "prepublishOnly": "npm run clean && npm run build"
   },

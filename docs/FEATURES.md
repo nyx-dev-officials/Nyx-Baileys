@@ -274,6 +274,49 @@ re-proposes them.
 | 125 | TTY / `NO_COLOR` detection | `utils` | Colour only when it is a terminal and `NO_COLOR` is unset. `utils/logger.ts:21` |
 | 126 | `silentLogger` | `utils` | The library default — a library should not spray the host app's stdout. `utils/logger.ts:50-56` |
 
+## utils / pure helpers (60)
+
+Every symbol below is in `nyx-baileys/lite` and pulls **no** engine. See
+`README.md` → "Performance and the `lite` entry".
+
+| # | Name | Layer | What it does |
+|---|---|---|---|
+| 127 | `bold`/`italic`/`strikethrough`/`monospace` | `utils` | WhatsApp markup wrappers, one keystroke each. `utils/text.ts` |
+| 128 | `quote()` | `utils` | Block-quote every line of a multi-line body. `utils/text.ts` |
+| 129 | `escapeWhatsApp()` / `stripFormatting()` | `utils` | Remove the characters WhatsApp would render as markup. `utils/text.ts` |
+| 130 | `truncate()` | `utils` | Cut to a length with an ellipsis, never overshooting `max`. `utils/text.ts` |
+| 131 | `normalizeWhitespace()` / `isBlank()` | `utils` | Collapse runs and detect empty-or-whitespace. `utils/text.ts` |
+| 132 | `titleCase()` / `slugify()` | `utils` | Display casing and URL-safe slugs. `utils/text.ts` |
+| 133 | `chunkText()` | `utils` | Split long bodies to the wire limit, preferring newline/space boundaries. `utils/text.ts` |
+| 134 | `similarity()` | `utils` | Dice coefficient over bigrams — cheap fuzzy match for typo-tolerant commands. `utils/text.ts` |
+| 135 | `initials()` / `mask()` | `utils` | Avatar initials and middle-masked phone numbers. `utils/text.ts` |
+| 136 | `wordCount()` / `pluralize()` | `utils` | Word counting and `1 item`/`2 items`. `utils/text.ts` |
+| 137 | `formatBytes()` | `utils` | `1536` → `1.5 KB`, binary units. `utils/format.ts` |
+| 138 | `formatDuration()` | `utils` | Aligned `1h 00m 00s`, leading zero units dropped. `utils/format.ts` |
+| 139 | `formatElapsed()` | `utils` | Compact timer form: `340ms`, `1.2s`, `1m 30s`. `utils/format.ts` |
+| 140 | `formatNumber()` | `utils` | Thousands separators, locale-free. `utils/format.ts` |
+| 141 | `formatPercent()` / `ordinal()` / `formatCompact()` | `utils` | `12.3%`, `21st`, `3.4M`. `utils/format.ts` |
+| 142 | `padStart()` / `padEnd()` | `utils` | Width padding, the menu-alignment primitive. `utils/format.ts` |
+| 143 | `seeded()` | `utils` | Deterministic mulberry32 PRNG — identical runs for identical seeds. `utils/random.ts` |
+| 144 | `randomInt()` / `randomFloat()` / `chance()` | `utils` | Ranged rolls and probability checks. `utils/random.ts` |
+| 145 | `pick()` / `sample()` / `shuffle()` | `utils` | One, N-distinct, or a permutation — all injectable. `utils/random.ts` |
+| 146 | `weighted()` | `utils` | Weighted choice for loot tables and greeting rotation. `utils/random.ts` |
+| 147 | `nanoId()` / `uuid()` | `utils` | Short URL-safe ids and v4 UUIDs. `utils/random.ts` |
+| 148 | `jitter()` | `utils` | Roughly-normal centre-zero noise for anti-ban timing. `utils/random.ts` |
+| 149 | `parseDuration()` | `utils` | `1h30m`, `2 days 5 min`, bare seconds → ms. `utils/time.ts` |
+| 150 | `formatRelative()` | `utils` | `3 minutes ago` / `in 2 hours`, unit chosen by magnitude. `utils/time.ts` |
+| 151 | `formatSpan()` | `utils` | Shortest honest `3m` / `5h` / `4d`. `utils/time.ts` |
+| 152 | `toEpochMs()` / `looksLikeMs()` | `utils` | Normalise seconds-vs-milliseconds timestamps from the wire. `utils/time.ts` |
+| 153 | `startOfDay()` / `fromUnixSeconds()` | `utils` | UTC midnight and seconds→ms. `utils/time.ts` |
+| 154 | `tokenizeArgs()` | `utils` | Split a command body, keeping quoted spans whole. `utils/args.ts` |
+| 155 | `parseArgs()` | `utils` | Positional words plus `--flags`, `--k=v`, `-f`, negative numbers. `utils/args.ts` |
+| 156 | `flagValue()` / `hasFlag()` / `firstArg()` / `restFrom()` | `utils` | Flag and positional accessors. `utils/args.ts` |
+| 157 | `TtlCache` | `utils` | TTL + LRU map with injectable clock and hit/miss/eviction stats. `utils/cache.ts` |
+| 158 | `memoize()` | `utils` | Compute-once-per-key wrapper; a rejected promise evicts itself. `utils/cache.ts` |
+| 159 | `TaskQueue` | `utils` | At most N tasks in flight, in order, with `pause`/`clear`/`onIdle`. `utils/queue.ts` |
+| 160 | `Semaphore` | `utils` | The same limit as a scoped `run()` that releases on throw. `utils/queue.ts` |
+| 161 | `withRetry()` / `backoffDelay()` | `utils` | Capped exponential backoff with `shouldRetry` and injected sleep. `utils/queue.ts` |
+
 ## security / permissions (6)
 
 | # | Name | Layer | What it does |

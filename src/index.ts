@@ -125,6 +125,13 @@ export * from './antiban/index.js';
 
 export { code, compose, preformatted, table } from './utils/compose.js';
 export { createLogger, silentLogger } from './utils/logger.js';
+export * from './utils/text.js';
+export * from './utils/format.js';
+export * from './utils/random.js';
+export * from './utils/time.js';
+export * from './utils/args.js';
+export * from './utils/cache.js';
+export * from './utils/queue.js';
 
 /* ── engine surface ────────────────────────────────────────────────────
  *

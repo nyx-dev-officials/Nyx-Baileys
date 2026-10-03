@@ -70,24 +70,61 @@ explicit cast. Nothing in `node_modules` is touched at any point.
 
 Full detail: [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
+## Performance and the `lite` entry
+
+The root entry re-exports all of Baileys, which is correct for anything that
+opens a socket and wasteful for a script that only wants JID helpers, a clock
+estimate or the text utilities — the upstream protocol stack is protobufjs and
+libsignal, and you pay for it at import time whether you dial out or not.
+
+`nyx-baileys/lite` carries the pure surface only and pulls **none** of the
+engine. Nothing in its transitive import graph may import
+`@whiskeysockets/baileys`; `tests/lite.test.js` walks the built graph and fails
+the suite if that rule is broken.
+
+```ts
+import { canonicalThreadKey, chunkText, formatDuration } from 'nyx-baileys/lite';
+```
+
+Cold import, on this machine (Node 24):
+
+| Entry | Time | Heap | Exports |
+|---|---|---|---|
+| `nyx-baileys` (root) | ~1286 ms | ~22.0 MB | 539 |
+| `nyx-baileys/lite` | ~50 ms | ~1.3 MB | 120 |
+
+That is **~96% faster and ~95% lighter** for a script that never opens a socket.
+
+Two other costs were attacked. The default plugin chain's per-message overhead
+was measured at **2.33 µs/message** and is now **~1.25 µs/message** on the same
+synthetic load, because memory GC used to call a full `sweep()` once *per
+message* — and each sweep walks every chat — instead of once *per batch*. Run it
+yourself:
+
+```bash
+npm run bench -- 100000 500
+```
+
 ## Project layout
 
 ```
 src/
   index.ts           public surface (500+ exports) + demo main()
+  lite.ts            engine-free entry: pure helpers only, no baileys
   nyxBaileys.ts    the wrapper class: lifecycle, plugin chain, rebuild
   core/              socket · intercept · nodes · media · session-store ·
                      clock · delivery · retry · errors · jid · album
   plugins/           13 default plugins + 10 opt-in feature plugins
   antiban/           opt-in anti-ban engines — see docs/ANTIBAN.md
   integrations/      keyless HTTP integrations + Indonesian localisation
-  utils/             types · compose · logger
+  utils/             types · compose · logger · text · format · random ·
+                     time · args · cache · queue
   adapters/          SessionStore: sqlite · mongo · prisma · redis
   multi/             SessionManager — one process, N accounts
   security/          validate · redact · permissions · acl · audit
   cli/               args · output
 bot/               command loader + createNyxBot host for bot scripts
-tests/               21 node:test suites, 305 tests
+tests/               30 node:test suites, 417 tests
 docs/                this file, ARCHITECTURE, PLUGIN-API, FEATURES,
                      DESIGN-NOTES, VERIFICATION, REF-FINDINGS, ANTIBAN
 ```
