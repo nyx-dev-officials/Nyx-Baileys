@@ -23,7 +23,14 @@ function rig(options = {}) {
   const seen = [];
   sock.ev.on('nyx.groupAlert', (alert) => seen.push(alert));
   const harness = applyPlugin(groupGuard(options), sock);
-  return { sock, seen, alerts: sock.groupAlerts, admins: sock.groupAdmins, ...harness };
+  return {
+    sock,
+    seen,
+    alerts: sock.groupAlerts,
+    admins: sock.groupAdmins,
+    members: sock.groupMembers,
+    ...harness,
+  };
 }
 
 const add = (sock, participants, group = GROUP) =>
@@ -184,20 +191,42 @@ test('the privilege-climb alert fires on the third all-admin promotion', () => {
   assert.equal(alerts[0].groupId, GROUP);
 });
 
-test('a demotion removes the participant from the all-admin set', () => {
-  const { sock, alerts } = rig();
+test('a demotion lowers the elevation ratio and suppresses the climb', () => {
+  // The fixed signal divides admins by the population actually observed in the
+  // group. A demoted participant stays in that population, so a group that is
+  // no longer almost-entirely-admin stops alerting — which is the whole point.
+  const { sock, alerts, admins, members } = rig();
 
   promote(sock, [pn(1)]);
   promote(sock, [pn(2)]);
-  demote(sock, [pn(1)]);
-  assert.equal(alerts.length, 0);
-
   promote(sock, [pn(3)]);
-  assert.equal(alerts.length, 0, 'the set is still only 2 strong');
+  assert.equal(alerts.length, 1, 'three of three observed is a climb');
+  assert.equal(alerts[0].detail, '3 participants observed, all elevated');
+
+  demote(sock, [pn(1)]);
+  assert.deepEqual([...admins.get(GROUP)].sort(), [pn(2), pn(3)].sort());
+  assert.equal(members.get(GROUP).size, 3, 'the demoted member stays in the population');
 
   promote(sock, [pn(4)]);
-  assert.equal(alerts.length, 1);
-  assert.equal(alerts[0].detail, '3 participants observed, all elevated');
+  assert.equal(alerts.length, 1, '4 observed, 3 elevated is 0.75 — below the 0.8 ratio');
+  assert.equal(admins.get(GROUP).size, 3, 'the fourth member is still elevated');
+});
+
+test('a group with a plain-member majority never trips the climb signal', () => {
+  // The regression guard for the original tautology: the old code divided by a
+  // set that only ever held admins, so this exact sequence alerted every time.
+  const { sock, alerts } = rig();
+
+  for (let i = 1; i <= 6; i += 1) add(sock, [pn(i)]);
+  promote(sock, [pn(1)]);
+  promote(sock, [pn(2)]);
+  promote(sock, [pn(3)]);
+
+  assert.equal(
+    alerts.filter((a) => a.kind === 'privilege-climb').length,
+    0,
+    '3 elevated out of 9 observed members is not a climb',
+  );
 });
 
 test('the admin set is exposed and only holds elevated participants', () => {

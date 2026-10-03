@@ -23,11 +23,10 @@ export interface Patch<T extends object> {
   undo(): void;
   /** Was the method actually present to patch? */
   readonly applied: boolean;
-}
-
-/**
- * Replace `target[name]` with `wrapper`, chaining onto whatever is already
- * there. Returns an undo handle.
+}  /**
+   * Replace `target[name]` with `wrapper`, chaining onto whatever is already
+   * there. Returns an undo handle that is safe to call more than once and that
+   * refuses to clobber a newer wrapper it has already been superseded by.
  *
  * The wrapper receives the implementation that was in place *at the moment of
  * this patch* — so applying A then B yields `B(A(original))`, not
@@ -79,9 +78,16 @@ export function patch<T extends object>(
   Object.defineProperty(patched, 'name', { value: String(name), configurable: true });
   (target as AnyRecord)[name] = patched;
 
+  // Undo restores the true pristine, which unwinds the *whole* chain on that
+  // method — so undoing an inner patch first still lands on the original. The
+  // flag makes each handle idempotent, so a double undo (a superseded handle
+  // run again) is a no-op rather than a second write.
+  let undone = false;
   return {
     applied: true,
     undo: () => {
+      if (undone) return;
+      undone = true;
       (target as AnyRecord)[name] = pristine;
     },
   };
@@ -157,6 +163,16 @@ export class Disposables {
 
   get size(): number {
     return this.#items.length;
+  }
+
+  /**
+   * Drop every pending disposer without running it. Used when a socket is being
+   * rebuilt and the old one is already gone — running the old unwinds against a
+   * dead socket is pointless work, and anything they left behind would leak into
+   * the new build.
+   */
+  reset(): void {
+    this.#items.length = 0;
   }
 
   dispose(): void {

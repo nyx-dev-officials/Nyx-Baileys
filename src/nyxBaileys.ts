@@ -7,6 +7,8 @@ import { createLogger } from './utils/logger.js';
 import type { CoreSocket, Logger, Plugin, SuperOptions } from './utils/types.js';
 
 import { antiSpam } from './plugins/antiSpam.js';
+import { clockSync } from './plugins/clock-sync.js';
+import { delivery } from './plugins/delivery.js';
 import { stealth } from './plugins/stealth.js';
 import { warmup } from './plugins/warmup.js';
 import { lidRouter } from './plugins/lid.js';
@@ -56,14 +58,16 @@ export class NyxBaileys {
   protected plugins(): Plugin[] {
     return [
       stealth(),      // 10  identity + tuning
+      clockSync(),    // 15  server clock estimate
       lidRouter(),    // 20  target resolution
       mediaStreamer(),// 30  download path
       albumHandler(), // 40  incoming containers
       memoryGc(),     // 50  prune state
       groupGuard(),   // 60  admin policy
-      sessionRepair(),// 70  message normaliser
-      autoReconnect(), // 75  self-healing backoff
+      sessionRepair(),// 65  message normaliser
+      autoReconnect(), // 70  self-healing backoff
       antiSpam(),     // 80  pacing queue
+      delivery(),     // 85  delivery-rate tracking
       flowEngine(),   // 90  conversational routing
       warmup(),       // 100 rate ramp
     ];
@@ -139,6 +143,10 @@ export class NyxBaileys {
 
     this.log.info('rebuilding socket');
     this.#disposables.dispose();
+    // A throwing disposer is swallowed by `dispose()`, so any it left behind
+    // would otherwise be re-run against the *new* socket. Clear explicitly so
+    // the rebuilt socket starts from a genuinely empty unwind stack.
+    this.#disposables.reset();
     this.applied.length = 0;
 
     try {

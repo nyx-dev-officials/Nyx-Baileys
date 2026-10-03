@@ -50,6 +50,47 @@ export { createSessionStore, FileSessionStore, MemorySessionStore } from './core
 export { DEFAULT_BROWSER, desktopUserAgent, resolveWebVersion } from './core/socket.js';
 export { patch, patchAll, Disposables } from './core/intercept.js';
 
+/* ── reference-fork features (ported) ────────────────────────────── */
+export { ClockSync } from './core/clock.js';
+export type { ClockSample, ClockSyncOptions, ClockSyncStats } from './core/clock.js';
+export { DeliveryTracker } from './core/delivery.js';
+export type { DeliveryStats, DeliveryTrackerOptions } from './core/delivery.js';
+export {
+  MessageRetryReason,
+  MAC_ERROR_CODES,
+  parseRetryReason,
+  isMacError,
+  isRetryable,
+  describeRetryReason,
+} from './core/retry.js';
+export {
+  NyxError,
+  SessionNotFoundError,
+  NotConnectedError,
+  InvalidSessionIdError,
+  QueueFullError,
+  BurstCeilingError,
+  PayloadTooLargeError,
+  isNyxError,
+} from './core/errors.js';
+export {
+  bareJid,
+  canonicalThreadKey,
+  deviceOf,
+  isBroadcast,
+  isGroup,
+  isLid,
+  isNewsletter,
+  isPn,
+  kindOf,
+  phoneOf,
+  sameUser,
+  toLidJid,
+  toPnJid,
+  userOf,
+} from './core/jid.js';
+export type { JidKind } from './core/jid.js';
+
 export { antiSpam } from './plugins/antiSpam.js';
 export { stealth } from './plugins/stealth.js';
 export { warmup, rampFor } from './plugins/warmup.js';
@@ -61,6 +102,8 @@ export { memoryGc } from './plugins/memory.js';
 export { mediaStreamer } from './plugins/media-stream.js';
 export { autoReconnect } from './plugins/reconnect.js';
 export { sessionRepair } from './plugins/session-repair.js';
+export { clockSync } from './plugins/clock-sync.js';
+export { delivery } from './plugins/delivery.js';
 
 export { code, compose, preformatted, table } from './utils/compose.js';
 export { createLogger, silentLogger } from './utils/logger.js';
@@ -84,6 +127,18 @@ export * from '@whiskeysockets/baileys';
 export * from './adapters/index.js';
 export * from './multi/index.js';
 export * from './security/index.js';
+
+/* ── opt-in feature plugins + integrations ──────────────────────────
+ *
+ * Ten feature plugins (polls, reactions, presence, read receipts, status,
+ * newsletters, call log, commands, webhooks, metrics) and the keyless
+ * integrations layer. None is in the default chain — each encodes a product
+ * decision — but all are now reachable from the root instead of only from
+ * `dist/`. `featurePlugins()` returns them pre-sorted by `order`.
+ */
+
+export * from './plugins/index.js';
+export * from './integrations/index.js';
 
 export {
   firstMedia,
@@ -338,10 +393,14 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     ]));
   }
 
-  // Hold the process open until the socket dies.
-  sock.ev.on('connection.update', (u: { connection?: string }) => {
-    if (u.connection === 'close') {
-      console.error('socket closed');
+  // Hold the process open until the socket dies. This goes through the host's
+  // single connection-owner (`onConnection`) rather than adding a second
+  // `connection.update` listener: the old duplicate disposed the client on
+  // *every* close, tearing the socket out from under the reconnect plugin's
+  // rebuild. Only a terminal logout — which no reconnect can fix — ends it.
+  client.onConnection((phase, payload) => {
+    if (phase === 'close' && payload === DisconnectReason.loggedOut) {
+      console.error('logged out; a fresh pairing is required');
       void client.dispose();
     }
   });

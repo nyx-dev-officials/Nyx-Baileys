@@ -31,24 +31,39 @@ export function warmup(days = 3): Plugin {
     async apply(ctx) {
       if (days <= 0) return;
       const log = ctx.log.child('warmup');
-      const startedAt = await ctx.state.get<number>('warmupStartedAt', 0);
+      let startedAt = await ctx.state.get<number>('warmupStartedAt', 0);
 
       if (!startedAt) {
-        await ctx.state.set('warmupStartedAt', Date.now());
+        startedAt = Date.now();
+        await ctx.state.set('warmupStartedAt', startedAt);
         log.info('warm-up started', { days });
-        return;
       }
-
-      const ageDays = (Date.now() - startedAt) / DAY;
-      log.debug('warm-up progress', { ageDays: ageDays.toFixed(2), days });
 
       // Feed the pacing layer. antiSpam exposes __antispam; the two plugins are
       // coupled through socket state rather than a hard import, which keeps the
       // plugin order flexible.
-      const factor = rampFor(startedAt, days);
       const antispam = (ctx.sock as unknown as Record<string, { setPressure?: (n: number) => void }>)
         .__antispam;
-      antispam?.setPressure?.(factor);
+      const apply = (at: number): void => antispam?.setPressure?.(rampFor(at, days));
+
+      // Applied on *this* build too — a freshly paired number previously had its
+      // start time recorded but no pressure applied, so day-one ramp did nothing
+      // until the next restart.
+      apply(startedAt);
+
+      const ageDays = (Date.now() - startedAt) / DAY;
+      log.debug('warm-up progress', { ageDays: ageDays.toFixed(2), days });
+
+      // Re-evaluate hourly, so a long-lived socket eases toward 1× as the
+      // session ages instead of holding its day-one multiplier for the entire
+      // process lifetime.
+      const tick = setInterval(() => {
+        void Promise.resolve(ctx.state.get<number>('warmupStartedAt', startedAt)).then((at) => {
+          apply(at || startedAt);
+        });
+      }, 60 * 60 * 1000);
+      tick.unref?.();
+      ctx.onDispose(() => clearInterval(tick));
     },
   };
 }

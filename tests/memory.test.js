@@ -176,6 +176,30 @@ test('an evicted blob keeps its bytes, only the map entry goes', async () => {
   assert.equal(store.take('newest').toString(), '!');
 });
 
+test('an acquired blob is pinned out of eviction, and the ceiling is still met', () => {
+  const { store } = rig({ keepMedia: 2 });
+
+  store.put('k1', Buffer.from('aaaa'));
+  assert.equal(store.acquire('k1').toString(), 'aaaa');
+
+  store.put('k2', Buffer.from('bbbb'));
+  store.put('k3', Buffer.from('cccc'));
+
+  assert.equal(store.media.has('k1'), true, 'the pinned blob survived the sweep');
+  assert.equal(store.media.has('k2'), false, 'the unpinned oldest was evicted instead');
+  assert.ok(store.media.size <= 2, 'the ceiling was still honoured');
+
+  store.release('k1');
+  store.put('k4', Buffer.from('dddd'));
+  assert.equal(store.media.has('k1'), false, 'once released it is eligible again');
+});
+
+test('acquire/release of an unknown key are safe no-ops', () => {
+  const { store } = rig();
+  assert.equal(store.acquire('missing'), undefined);
+  assert.doesNotThrow(() => store.release('missing'));
+});
+
 test('media below the cap is never touched', () => {
   const { store } = rig({ keepMedia: 10 });
   for (let i = 0; i < 10; i += 1) store.put(`k${i}`, Buffer.from('x'));

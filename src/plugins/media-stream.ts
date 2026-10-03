@@ -1,4 +1,4 @@
-import { downloadMediaMessage, getContentType } from '@whiskeysockets/baileys';
+import { downloadMediaMessage } from '@whiskeysockets/baileys';
 
 import type { WAMessage } from '@whiskeysockets/baileys';
 
@@ -14,23 +14,32 @@ import type { Plugin } from '../utils/types.js';
  * This wraps that call with three things the raw API doesn't give you:
  *
  *   1. a size ceiling, refused *with the size attached* so the caller can decide
- *      to skip or to fetch out of band
+ *      to skip or to fetch out of band — and refused from the sender's declared
+ *      length before any bytes are decrypted when possible
  *   2. an honest error instead of a silent empty buffer — expired keys and
  *      unsupported media both return empty, and that is how broken media bugs
  *      survive for months
- *   3. `streamTo`, which hands the caller 64 KB chunks and lets them release as
- *      they go, so the peak is bounded by the chunk, not by the asset
+ *   3. `streamTo`, which asks rc14 for a `stream` and forwards it one chunk at a
+ *      time, so peak memory is the chunk (plus a small coalescing buffer), not
+ *      the asset
  */
 
 export interface MediaStreamOptions {
   /** Hard ceiling for a single download. Default 32 MiB. */
   maxBytes?: number;
-  /** Chunk size for `streamTo`. */
+  /** Coalescing size for `streamTo` chunks. Default 64 KiB. */
   chunkSize?: number;
 }
 
 export interface DownloadResult {
   buffer: Buffer;
+  mime: string;
+  fileName: string;
+  bytes: number;
+}
+
+/** What `streamTo` returns: metadata plus the byte count, but no buffer. */
+export interface StreamSummary {
   mime: string;
   fileName: string;
   bytes: number;
@@ -58,14 +67,35 @@ export function mediaStreamer(options: MediaStreamOptions = {}): Plugin {
     apply(ctx) {
       const log = ctx.log.child('media');
 
+      /**
+       * Metadata + the declared byte count, shared by both download paths.
+       *
+       * The presence check asks for an actual media field rather than leaning on
+       * `getContentType`, which returns `conversation` for a plain text message
+       * and would let a non-media message through to the downloader.
+       */
+      const guard = (message: WAMessage, limit: number): { mime: string; fileName: string } => {
+        const meta = firstMedia(message);
+        if (!meta) throw new Error('media-stream: message carries no media');
+
+        // The sender's declared length is untrusted, so it only ever rejects
+        // early — never approves. Checking it *before* decoding is the whole
+        // point: a 900 MB video should be refused without decrypting it.
+        const declared = sizeOf(message);
+        if (declared !== null && declared > limit) throw new MediaTooLargeError(declared, limit);
+
+        return {
+          mime: meta.mimetype ?? 'application/octet-stream',
+          fileName: meta.fileName ?? `media_${Date.now()}`,
+        };
+      };
+
       const fetch = async (
         message: WAMessage,
         opts: { maxBytes?: number } = {},
       ): Promise<DownloadResult> => {
         const limit = opts.maxBytes ?? maxBytes;
-
-        const kind = getContentType(message.message ?? undefined);
-        if (!kind) throw new Error('media-stream: message carries no recognised content type');
+        const { mime, fileName } = guard(message, limit);
 
         const buffer = Buffer.from(
           await downloadMediaMessage(message, 'buffer', {}, ctx.sock as never),
@@ -78,39 +108,61 @@ export function mediaStreamer(options: MediaStreamOptions = {}): Plugin {
         }
         if (buffer.byteLength > limit) throw new MediaTooLargeError(buffer.byteLength, limit);
 
-        // A sender-declared size above the ceiling can be refused before we
-        // spend the RAM to find out. Declared length is untrusted, so it only
-        // ever rejects early — never approves.
-        const declared = sizeOf(message);
-        if (declared !== null && declared > limit) {
-          throw new MediaTooLargeError(declared, limit);
-        }
-
-        const meta = firstMedia(message);
-
-        return {
-          buffer,
-          mime: meta?.mimetype ?? 'application/octet-stream',
-          fileName: meta?.fileName ?? `media_${Date.now()}`,
-          bytes: buffer.byteLength,
-        };
+        return { buffer, mime, fileName, bytes: buffer.byteLength };
       };
 
       /**
-       * Decrypt once, then hand out bounded chunks. The full buffer exists
-       * briefly because the socket delivers it that way — what this buys is
-       * that the caller never retains it and can abort mid-transfer.
+       * Stream the decrypted payload out one chunk at a time. rc14's `'stream'`
+       * mode yields a `Transform` that decrypts lazily, so the caller never
+       * holds the full asset: peak memory is a stream chunk plus the coalescing
+       * buffer. The byte ceiling is enforced *during* the transfer, so an
+       * under-declared asset is still stopped.
        */
       const streamTo = async (
         message: WAMessage,
         write: (chunk: Buffer) => void | Promise<void>,
-      ): Promise<DownloadResult> => {
-        const full = await fetch(message);
-        for (let i = 0; i < full.bytes; i += chunkSize) {
-          const end = Math.min(i + chunkSize, full.bytes);
-          await write(Buffer.from(full.buffer.subarray(i, end)));
+        opts: { maxBytes?: number } = {},
+      ): Promise<StreamSummary> => {
+        const limit = opts.maxBytes ?? maxBytes;
+        const { mime, fileName } = guard(message, limit);
+
+        const stream = (await downloadMediaMessage(
+          message,
+          'stream',
+          {},
+          ctx.sock as never,
+        )) as unknown as AsyncIterable<Uint8Array>;
+
+        let total = 0;
+        let pending: Buffer[] = [];
+        let pendingBytes = 0;
+
+        const flush = async (): Promise<void> => {
+          if (pendingBytes === 0) return;
+          const chunk = pending.length === 1 ? pending[0]! : Buffer.concat(pending, pendingBytes);
+          pending = [];
+          pendingBytes = 0;
+          await write(chunk);
+        };
+
+        for await (const piece of stream) {
+          const chunk = Buffer.from(piece);
+          total += chunk.byteLength;
+          if (total > limit) throw new MediaTooLargeError(total, limit);
+
+          pending.push(chunk);
+          pendingBytes += chunk.byteLength;
+          if (pendingBytes >= chunkSize) await flush();
         }
-        return full;
+        await flush();
+
+        if (total === 0) {
+          throw new Error(
+            'media-stream: decrypted to an empty buffer (expired media key or unsupported type)',
+          );
+        }
+
+        return { mime, fileName, bytes: total };
       };
 
       Object.defineProperty(ctx.sock, 'downloadMedia', {

@@ -33,6 +33,13 @@ export interface MediaBlob {
   size: number;
   at: number;
   ref: Buffer;
+  /**
+   * Live references to this blob. Starts at 1 (the store's own), rises while a
+   * caller is mid-download through `acquire`, and only a blob sitting at 1 is
+   * eligible for eviction — so the sweep never pulls bytes out from under a
+   * reader.
+   */
+  refs: number;
 }
 
 export function memoryGc(options: MemoryGcOptions = {}): Plugin {
@@ -69,13 +76,19 @@ export function memoryGc(options: MemoryGcOptions = {}): Plugin {
           statuses.splice(0, statuses.length - keepStatuses);
         }
 
-        // Media is evicted oldest-first. The map entry always goes, even for a
-        // zero-length buffer — skipping it pinned the entry forever and let
-        // `media.size` grow past the documented ceiling.
+        // Media is evicted oldest-first until we are back under the ceiling. The
+        // map entry always goes once chosen — including for a zero-length
+        // buffer, which used to be skipped and so pinned itself forever. A blob
+        // a caller has `acquire`d (refs > 1) is skipped this round rather than
+        // deleted, and the scan continues so the ceiling is still honoured.
         if (media.size > keepMedia) {
           const ordered = [...media.values()].sort((a, b) => a.at - b.at);
-          for (const blob of ordered.slice(0, media.size - keepMedia)) {
+          let over = media.size - keepMedia;
+          for (const blob of ordered) {
+            if (over <= 0) break;
+            if (blob.refs > 1) continue; // held by a live reader
             media.delete(blob.key);
+            over -= 1;
           }
         }
 
@@ -116,8 +129,24 @@ export function memoryGc(options: MemoryGcOptions = {}): Plugin {
           media,
           statuses,
           put: (key: string, ref: Buffer) => {
-            media.set(key, { key, size: ref.byteLength, at: Date.now(), ref });
+            media.set(key, { key, size: ref.byteLength, at: Date.now(), ref, refs: 1 });
             sweep();
+          },
+          /**
+           * Pin a blob for the duration of a read. While held, the sweep will
+           * not evict it. Pair every call with `release`.
+           */
+          acquire: (key: string): Buffer | undefined => {
+            const blob = media.get(key);
+            if (!blob) return undefined;
+            blob.refs += 1;
+            return blob.ref;
+          },
+          /** Drop a pin taken by `acquire`. A no-op once the blob has gone. */
+          release: (key: string): void => {
+            const blob = media.get(key);
+            if (!blob) return;
+            blob.refs = Math.max(1, blob.refs - 1);
           },
           take: (key: string): Buffer | undefined => {
             const blob = media.get(key);

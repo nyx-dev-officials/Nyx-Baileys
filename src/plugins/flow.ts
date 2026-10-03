@@ -194,6 +194,13 @@ export function flowEngine(flows: Flow[] = []): Plugin {
             log.warn('goto target missing', { flow: running.flow.id, to: name });
             return;
           }
+          // A step can call `end()` and then `goto()`, or the flow can TTL-expire
+          // between the two. `run()` would then return early on a missing entry
+          // and drop the jump without a word — surface it instead.
+          if (active.get(jid) !== running) {
+            log.warn('goto with no active flow', { flow: running.flow.id, to: name });
+            return;
+          }
           void run(jid, next);
         },
         end: () => {

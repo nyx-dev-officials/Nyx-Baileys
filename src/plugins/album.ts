@@ -99,6 +99,14 @@ export function albumHandler(): Plugin {
             const expected = (container.expectedImageCount ?? 0) + (container.expectedVideoCount ?? 0);
             const id = msg.key?.id ?? `${jid}:${Date.now()}`;
             const album = ensure(id, jid, expected);
+            // Siblings can race ahead of the parent, in which case the album was
+            // created with a MAX_SAFE_INTEGER placeholder count. Now that the
+            // real count is known, adopt it — otherwise `completedAt` is never
+            // set and `waitFor` times out on a perfectly healthy album.
+            if (album.expected !== expected) {
+              album.expected = expected;
+              log.debug('album parent arrived late, count resolved', { key: id, expected });
+            }
             log.debug('album parent', { key: id, expected });
 
             // Legacy shape: pull the nested media in directly.

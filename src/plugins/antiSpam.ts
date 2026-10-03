@@ -1,3 +1,4 @@
+import { BurstCeilingError, QueueFullError } from '../core/errors.js';
 import { patch } from '../core/intercept.js';
 import type { AntiSpamOptions, Plugin } from '../utils/types.js';
 
@@ -56,9 +57,7 @@ export function antiSpam(user: Partial<AntiSpamOptions> = {}): Plugin {
         const now = Date.now();
         while (sentAt.length && now - sentAt[0]! >= 60_000) sentAt.shift();
         if (sentAt.length >= cfg.maxPerMinute) {
-          throw new Error(
-            `anti-spam: burst ceiling ${cfg.maxPerMinute}/min reached; queueing is the right call here`,
-          );
+          throw new BurstCeilingError(cfg.maxPerMinute);
         }
         sentAt.push(now);
       };
@@ -95,7 +94,7 @@ export function antiSpam(user: Partial<AntiSpamOptions> = {}): Plugin {
           args: unknown[],
         ): Promise<unknown> => {
           if (queue.length >= cfg.maxQueue) {
-            return Promise.reject(new Error(`anti-spam: queue full (${cfg.maxQueue})`));
+            return Promise.reject(new QueueFullError(cfg.maxQueue));
           }
           return new Promise((resolve, reject) => {
             queue.push({

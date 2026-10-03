@@ -711,3 +711,50 @@ test('flows is attached non-enumerably', () => {
   assert.equal(Object.keys(sock).includes('flows'), false);
   assert.equal(Object.getOwnPropertyDescriptor(sock, 'flows').enumerable, false);
 });
+
+/* ── goto guard ──────────────────────────────────────────────────────── */
+
+test('goto() after end() is a logged no-op, not a silent drop', async () => {
+  const seen = [];
+  const { sock, flows, log } = rig([
+    {
+      id: 'ending',
+      entry: 'start',
+      steps: [
+        {
+          name: 'start',
+          match: /^go/i,
+          run: (c) => {
+            // Ending and then jumping is a programming error. The engine must
+            // not resurrect the flow, and must not swallow the mistake either.
+            c.end();
+            c.goto('second');
+          },
+        },
+        { name: 'second', run: () => seen.push('second') },
+      ],
+    },
+  ]);
+
+  say(sock, 'go');
+  await sleep(0);
+
+  assert.equal(flows.active(CHAT), undefined, 'the flow stays ended');
+  assert.deepEqual(seen, [], 'the goto did not run a step');
+  assert.ok(log.has('goto with no active flow'), 'the drop was logged, not silent');
+});
+
+test('goto() to an unknown step logs instead of throwing', async () => {
+  const { sock, log } = rig([
+    {
+      id: 'lost',
+      entry: 'start',
+      steps: [{ name: 'start', match: /^go/i, run: (c) => c.goto('nowhere') }],
+    },
+  ]);
+
+  say(sock, 'go');
+  await sleep(0);
+
+  assert.ok(log.has('goto target missing'));
+});

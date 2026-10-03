@@ -19,6 +19,8 @@
     "./multi": "./dist/multi/index.js",
     "./multi/*": "./dist/multi/*.js",
     "./security": "./dist/security/index.js",
+    "./integrations": "./dist/integrations/index.js",
+    "./integrations/*": "./dist/integrations/*.js",
     "./cli": "./dist/cli/index.js",
     "./cli/*": "./dist/cli/*.js"
   },

@@ -36,7 +36,7 @@ Programmatically:
 import { createNyxBaileys } from 'nyx-baileys';
 
 const client = createNyxBaileys({ sessionDir: './session', logLevel: 'info' });
-const sock = await client.connect();           // real WASocket, 11 plugins applied
+const sock = await client.connect();           // real WASocket, 13 plugins applied
 
 await sock.sendMessage('15551234567@s.whatsapp.net', { text: 'hello' });
 
@@ -83,20 +83,20 @@ src/
   multi/             SessionManager — one process, N accounts
   security/          validate · redact · permissions · acl · audit
   cli/               args · output
-tests/               9 node:test suites, 195 tests
+tests/               16 node:test suites, 249 tests
 docs/                this file, ARCHITECTURE, PLUGIN-API, FEATURES,
                      DESIGN-NOTES, VERIFICATION, REF-FINDINGS
 ```
 
-The default chain, in `order`: `stealth` 10 · `lid-router` 20 · `media-stream` 30
-· `album` 40 · `memory-gc` 50 · `group-guard` 60 · `session-repair` 65 ·
-`reconnect` 70 · `anti-spam` 80 · `flow` 90 · `warmup` 100.
+The default chain, in `order`: `stealth` 10 · `clock-sync` 15 · `lid-router` 20
+· `media-stream` 30 · `album` 40 · `memory-gc` 50 · `group-guard` 60 ·
+`session-repair` 65 · `reconnect` 70 · `anti-spam` 80 · `delivery` 85 · `flow`
+90 · `warmup` 100.
 
 ## Capability coverage
 
-Measured against `VERIFICATION.md`'s 15-role matrix, after the six fixes it
-recommended were applied. Status is `VERIFICATION.md`'s, updated where a fix
-changed it.
+Measured against `VERIFICATION.md`'s 15-role matrix, after the full remediation
+pass. Status is `VERIFICATION.md`'s, updated where a fix changed it.
 
 | # | Capability | Status | Where |
 |---|---|---|---|
@@ -108,33 +108,41 @@ changed it.
 | 6 | LID ↔ JID mapping | covered | `plugins/lid.ts:67`, `:97` |
 | 7 | Native-flow form input parsing | covered | `plugins/flow.ts:95`, `:140` — was MISSING (D2) |
 | 8 | Chat flow state machine | covered | `plugins/flow.ts:202`, `:238` |
-| 9 | Memory GC store | partial | `plugins/memory.ts:60` — eviction inverted (D7) |
+| 9 | Memory GC store | covered | `plugins/memory.ts` — refcount-guarded eviction (D7) |
 | 10 | Payload normaliser | covered | `plugins/session-repair.ts:81` — was dead (D3) |
 | 11 | Multi-session core | covered | `nyxBaileys.ts:33`; `multi/session-manager.ts` |
 | 12 | SQL/NoSQL session bridge | covered | `core/session-store.ts:128`; `adapters/` |
 | 13 | Auto-retry backoff | covered | `plugins/reconnect.ts:63` — was unwired (D9) |
-| 14 | Media streaming | partial | `plugins/media-stream.ts:104` — buffers whole (D10) |
-| 15 | Group management | partial | `plugins/group.ts:73` — report-only, D6 tautological |
+| 14 | Media streaming | covered | `plugins/media-stream.ts` — true `stream` path (D10) |
+| 15 | Group management | covered | `plugins/group.ts` — membership-ratio climb (D6) |
 
-**6 of the 15 roles changed state.** Six defects were fixed and verified:
+**All 15 roles are covered.** Fifteen defects were fixed and verified:
 **D0** (npm scripts could not run — no `devDependencies`),
 **D1** (album linkage read a field rc14 does not have),
 **D2** (native-flow form submissions were invisible to the flow engine),
 **D3** (`patch()` did not stack — the second wrapper discarded the first),
+**D4** (`goto()` after `end()` dropped silently),
 **D5** (paired credentials were never written to disk),
-**D9** (`autoReconnect` was imported but absent from the chain).
+**D6** (privilege-climb signal was tautological),
+**D7** (media GC evicted the blobs it should keep),
+**D8** (disposables were not reset across rebuilds),
+**D9** (`autoReconnect` was imported but absent from the chain),
+**D10** (`streamMedia` buffered the whole asset),
+**D11** (`patchAll` handles could double-undo),
+**D12** (album parent arriving late never resolved the count),
+**D13** (`main()` installed a second `connection.update` listener),
+**D14** (the warm-up ramp was applied once and never advanced).
 
-Nine remain open: D4, D6, D7, D8, D10, D11, D12, D13, D14, plus two found
-afterwards — a `patch()` pristine-stash scoping bug that makes `undo()` set a
+Also fixed: a `patch()` pristine-stash scoping bug that made `undo()` set a
 second patched method to `undefined`, and `createEdit()` emitting a shape whose
-text is silently dropped on the wire. Details and reproductions:
-`ARCHITECTURE.md` §2 and §5.6.
+text was silently dropped on the wire. Every fix has a regression test in
+`tests/`.
 
 ## Honest limitations
 
 The verify chain is green as of 2026-10-03: `npm run check` and `npm run build`
 exit 0 under `strict` + `noUncheckedIndexedAccess`, and `npm test` reports
-**195 tests, 195 pass, 0 fail** in ~2.3s.
+**249 tests, 249 pass, 0 fail** in ~2.4s.
 
 The suite covers the primitives that everything else depends on — interception
 chaining and unwind, native-flow serialisation, album linkage, the jitter queue,
@@ -143,29 +151,22 @@ runs against fake sockets. Nothing here has been exercised against a live paired
 account, so poll votes, newsletters and client-side form rendering are
 unverified end to end.
 
-Three functional limits, stated plainly:
+Two functional limits, stated plainly:
 
 - **Albums can be received but not sent.** `createAlbumContainer()` emits the
   parent stub and the plugin assembles incoming albums, but there is no
   `sendAlbum()`. `FEATURES.md` T11.
-- **`streamMedia` is not streaming.** It decrypts the whole asset and then slices
-  it, because that is how the socket delivers it. Peak memory is the full asset
-  plus one chunk. `FEATURES.md` #195.
-- **The warm-up ramp is evaluated once per socket build**, not on an interval, so
-  a long-lived process holds its day-one multiplier for the socket's life.
+- **The warm-up ramp only advances on the hour.** It re-evaluates on a one-hour
+  interval rather than continuously, so the multiplier can lag the true session
+  age by up to an hour.
 
 The project was named "Super Baileys" until v0.1.0. `SuperBaileys` and
 `createSuperBaileys` remain as deprecated aliases for one release so the rename
 is not a breaking change; internal event namespaces moved from `super.*` to
 `nyx.*`, which *is* breaking for anyone subscribing to them.
-
-  `FEATURES.md` #199.
 - **Flow state is in memory**, so a restart drops in-flight conversations.
 - **Group policy is report-only.** There is no enforcement surface; the framework
   supplies a signal and a hook, and the decision stays with the operator.
-- **`createEdit()` is broken** — it emits `{editedMessage:{text}}` where rc14
-  wants `{editedMessage:{message:{conversation:text}}}`, and the text is silently
-  lost. `ARCHITECTURE.md` §5.6.
 
 And the deliberate one:
 

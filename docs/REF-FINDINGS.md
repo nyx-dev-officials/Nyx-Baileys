@@ -283,3 +283,55 @@ bounded caches, composite tenant keys, median-based clock skew, refusing partial
 recovery. None of it is exotic. The value was in knowing *which* paths are
 correct, and that knowledge is now in this repository's source rather than in a
 dependency on someone else's checkout.
+
+---
+
+## 9. Ports from the local `refs/` checkouts
+
+The twelve checkouts under `refs/` were re-surveyed for capabilities that are
+portable, and the ones worth keeping were ported into this repository as
+first-class, tested modules. The rest were left where they are, for the reasons
+below.
+
+### Ported
+
+| Capability | Source shape | Landed as |
+|---|---|---|
+| Rolling-median clock sync | a `ClockSync` class measuring skew against the RTT midpoint | `core/clock.ts`, `plugins/clock-sync.ts` — re-evaluated median, exposed as `sock.clock` |
+| Delivery-rate tracking | a tracker counting `messages.update` status 3/4 against sends | `core/delivery.ts`, `plugins/delivery.ts` — `sock.delivery.stats()` |
+| Retry reason decoding | a Signal/WhatsApp retry-reason enum with descriptions | `core/retry.ts` — plus `isRetryable`, which the source lacked |
+| Typed error taxonomy | `SessionNotFoundError` / `NotConnectedError` / `QueueFullError` | `core/errors.ts` — now raised by anti-spam and available everywhere |
+| JID canonicalisation | a canonicalizer plus a stable thread key | `core/jid.ts` — pure string helpers, no resolver state |
+
+The distinguishing test for "portable" was whether the technique improves
+correctness or observability *of the user's own client*. Clock skew, delivery
+rate, retry decoding, typed errors and JID canonicalisation all pass: they make
+the client honest about its own state.
+
+### Surveyed, not ported
+
+These are the modules whose purpose is to **look less automated to WhatsApp**,
+not to work better. They are the category [`DESIGN-NOTES.md`](./DESIGN-NOTES.md)
+already refuses, and the re-survey did not change that judgement:
+
+- **human-like activity generators** — scheduled typing, delayed receipts and
+  presence cycles while idle (`humanEntropy`, `presenceChoreographer`)
+- **deliberate imperfection injection** — typo-then-correct, mid-typing pauses
+  (`legitimacySignalInjector`, `contentVariator`)
+- **device / session fingerprint spoofing** — `deviceFingerprint`,
+  `sessionFingerprint`, egress `proxyRotator`
+- **receipt timing shaping** — `readReceiptVariance`
+- **reply-ratio and reputation gaming** — `replyRatio`, `reputationVoucher`
+
+Some of those files sit beside genuinely good engineering — a queue, a breaker,
+a canonicalizer. The split is by intent, exactly as §"Why the split matters"
+says: port the queue, decline the performance.
+
+### Already covered
+
+Most of what the forks advertise is already in this framework and needed no
+port: anti-spam jitter and burst ceilings (`antiSpam.ts`), exponential backoff
+with full jitter (`reconnect.ts`), SQL/NoSQL session stores with composite
+tenant keys (`adapters/`), one-process-N-accounts (`multi/`), native-flow
+forms and carousels (`nodes.ts`), album assembly (`album.ts`), newsletters
+(`newsletter.ts`), polls (`poll.ts`) and LID routing (`lid.ts`).
