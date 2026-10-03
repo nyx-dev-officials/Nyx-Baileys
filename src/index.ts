@@ -351,12 +351,18 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 
 export { supportFlow, demoForm as form, demoCarousel as carousel, demoTable as tableFlowDemo };
 
-// Only run when invoked directly, not when imported.
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '/').split('/').pop() ?? '')) {
-  main().then((code) => {
-    if (code !== 0) process.exit(code);
-  });
-}
-
-export default main;
 export { createNyxBaileys as createClient, DisconnectReason };
+
+/**
+ * Entry point for the bundled demo — exported **by name only**.
+ *
+ * There is deliberately no default export here. A library whose default export
+ * is a demo runner is a trap: an application writing
+ * `import makeWASocket from 'nyx-baileys'` gets this function instead of the
+ * socket factory, and because it is `async` the assignment yields a Promise —
+ * so the failure surfaces far from the cause, as
+ * `Cannot read properties of undefined (reading 'on')` when the socket's event
+ * emitter is accessed, rather than as an import error.
+ *
+ * Reach the factory with `import { makeWASocket } from 'nyx-baileys'`.
+ */
