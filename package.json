@@ -10,6 +10,7 @@
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./package.json": "./package.json",
     "./core/*": "./dist/core/*.js",
     "./plugins/*": "./dist/plugins/*.js",
     "./utils/*": "./dist/utils/*.js",

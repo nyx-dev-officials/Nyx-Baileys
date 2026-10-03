@@ -65,6 +65,20 @@ export { sessionRepair } from './plugins/session-repair.js';
 export { code, compose, preformatted, table } from './utils/compose.js';
 export { createLogger, silentLogger } from './utils/logger.js';
 
+/* ── engine surface ────────────────────────────────────────────────────
+ *
+ * Nyx-Baileys is a **superset** of upstream, not a replacement for it. Every
+ * symbol Baileys exports is re-exported here, so an application can depend on
+ * `nyx-baileys` alone and still reach `proto`, `useMultiFileAuthState`,
+ * `DisconnectReason`, `downloadMediaMessage` and the rest — while the decorated
+ * socket, plugins, adapters and integrations come from this package.
+ *
+ * A local export shadows a star export of the same name, so the explicit
+ * `proto` and plugin exports above win over upstream's identical `proto`.
+ */
+
+export * from '@whiskeysockets/baileys';
+
 /* ── extended surface (added by the module layer) ────────────────── */
 
 export * from './adapters/index.js';

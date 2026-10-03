@@ -85,7 +85,7 @@ export const JID_SERVERS = [
   'newsletter', // channel / newsletter
 ] as const;
 
-export type JidServer = (typeof JID_SERVERS)[number];
+export type JidServerName = (typeof JID_SERVERS)[number];
 
 /** WhatsApp's own wire limit. Anything longer is not a jid. */
 export const MAX_JID_LENGTH = 128;
@@ -116,7 +116,7 @@ export interface JidOptions {
 
 export interface JidParts {
   readonly user: string;
-  readonly server: JidServer;
+  readonly server: JidServerName;
   readonly device: number | null;
   /** Normalised form, device suffix retained. */
   readonly raw: string;
@@ -207,14 +207,14 @@ export function parseJid(input: unknown, options: JidOptions = {}): Validated<Ji
     }
     return VALID({
       user: bare,
-      server: 's.whatsapp.net' as JidServer,
+      server: 's.whatsapp.net' as JidServerName,
       device,
       raw: device === null ? `${bare}@s.whatsapp.net` : `${bare}:${device}@s.whatsapp.net`,
     });
   }
 
   /* per-server user grammar */
-  switch (server as JidServer) {
+  switch (server as JidServerName) {
     case 's.whatsapp.net':
     case 'lid':
     case 'newsletter':
@@ -245,7 +245,7 @@ export function parseJid(input: unknown, options: JidOptions = {}): Validated<Ji
 
   return VALID({
     user: bare,
-    server: server as JidServer,
+    server: server as JidServerName,
     device,
     raw: device === null ? `${bare}@${server}` : `${bare}:${device}@${server}`,
   });

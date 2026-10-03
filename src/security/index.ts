@@ -84,7 +84,7 @@ export type {
   InboundMessageShape,
   JidOptions,
   JidParts,
-  JidServer,
+  JidServerName,
   RecordOptions,
   StripOptions,
   TextOptions,
