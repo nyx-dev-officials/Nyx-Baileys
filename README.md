@@ -86,7 +86,8 @@ src/
   multi/             SessionManager — one process, N accounts
   security/          validate · redact · permissions · acl · audit
   cli/               args · output
-tests/               19 node:test suites, 286 tests
+bot/               command loader + createNyxBot host for bot scripts
+tests/               21 node:test suites, 305 tests
 docs/                this file, ARCHITECTURE, PLUGIN-API, FEATURES,
                      DESIGN-NOTES, VERIFICATION, REF-FINDINGS, ANTIBAN
 ```
@@ -95,6 +96,30 @@ The default chain, in `order`: `stealth` 10 · `clock-sync` 15 · `lid-router` 2
 · `media-stream` 30 · `album` 40 · `memory-gc` 50 · `group-guard` 60 ·
 `session-repair` 65 · `reconnect` 70 · `anti-spam` 80 · `delivery` 85 · `flow`
 90 · `warmup` 100.
+
+## Running a bot
+
+nyx-baileys ships the pieces a WhatsApp bot script otherwise hand-rolls: a
+command router with owner/admin/cooldown guards and a category menu, a loader
+for a directory of command modules, and `createNyxBot()` to wire them together.
+
+```bash
+OWNERS=15551234567 node examples/bot/index.mjs
+```
+
+```ts
+import { createNyxBot } from 'nyx-baileys';
+
+const bot = await createNyxBot({
+  sessionDir: './session',
+  owners: ['15551234567'],
+  commandsDir: './commands',
+});
+// /menu, /ping, and every command in ./commands are live.
+```
+
+See [`examples/bot/`](./examples/bot/) for a working bot and
+[the bot README](./examples/bot/README.md) for the command contract.
 
 ## Capability coverage
 
@@ -145,7 +170,7 @@ text was silently dropped on the wire. Every fix has a regression test in
 
 The verify chain is green as of 2026-10-03: `npm run check` and `npm run build`
 exit 0 under `strict` + `noUncheckedIndexedAccess`, and `npm test` reports
-**286 tests, 286 pass, 0 fail** in ~3.8s.
+**305 tests, 305 pass, 0 fail** in ~2.5s.
 
 The suite covers the primitives that everything else depends on — interception
 chaining and unwind, native-flow serialisation, album linkage, the jitter queue,

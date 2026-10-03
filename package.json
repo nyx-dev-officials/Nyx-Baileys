@@ -23,6 +23,8 @@
     "./integrations/*": "./dist/integrations/*.js",
     "./antiban": "./dist/antiban/index.js",
     "./antiban/*": "./dist/antiban/*.js",
+    "./bot": "./dist/bot/index.js",
+    "./bot/*": "./dist/bot/*.js",
     "./cli": "./dist/cli/index.js",
     "./cli/*": "./dist/cli/*.js"
   },

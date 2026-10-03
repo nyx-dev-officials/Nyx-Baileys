@@ -158,6 +158,10 @@ export * from './security/index.js';
 export * from './plugins/index.js';
 export * from './integrations/index.js';
 
+/* ── bot host (script-author surface) ─────────────────────────────── */
+export { createNyxBot, loadCommands, collectSpecs, installGracefulShutdown } from './bot/index.js';
+export type { NyxBot, NyxBotOptions, LoadedCommand, LoadCommandsOptions } from './bot/index.js';
+
 export {
   firstMedia,
   associationOf,
