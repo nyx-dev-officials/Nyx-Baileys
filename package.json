@@ -25,7 +25,11 @@
   "bin": {
     "nyx-baileys": "./bin/nyx-baileys.js"
   },
-  "files": ["dist", "README.md", "docs"],
+  "files": [
+    "dist",
+    "README.md",
+    "docs"
+  ],
   "engines": {
     "node": ">=20"
   },
@@ -51,7 +55,8 @@
     "typescript": "^5.9.2"
   },
   "dependencies": {
-    "@whiskeysockets/baileys": "^7.0.0-rc.14"
+    "@whiskeysockets/baileys": ">=7.0.0-rc.14",
+    "link-preview-js": "^3.2.0"
   },
   "peerDependencies": {
     "@whiskeysockets/baileys": ">=7.0.0-rc.14"
