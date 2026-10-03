@@ -308,24 +308,39 @@ correctness or observability *of the user's own client*. Clock skew, delivery
 rate, retry decoding, typed errors and JID canonicalisation all pass: they make
 the client honest about its own state.
 
-### Surveyed, not ported
+### Ported as opt-in evasion modules
 
-These are the modules whose purpose is to **look less automated to WhatsApp**,
-not to work better. They are the category [`DESIGN-NOTES.md`](./DESIGN-NOTES.md)
-already refuses, and the re-survey did not change that judgement:
+These make automated activity look less like automation. They now live in
+`src/antiban/` as a **deliberately opt-in, off-by-default** module set, separate
+from the default plugin chain, with its own warning document:
 
-- **human-like activity generators** — scheduled typing, delayed receipts and
-  presence cycles while idle (`humanEntropy`, `presenceChoreographer`)
-- **deliberate imperfection injection** — typo-then-correct, mid-typing pauses
-  (`legitimacySignalInjector`, `contentVariator`)
-- **device / session fingerprint spoofing** — `deviceFingerprint`,
-  `sessionFingerprint`, egress `proxyRotator`
-- **receipt timing shaping** — `readReceiptVariance`
-- **reply-ratio and reputation gaming** — `replyRatio`, `reputationVoucher`
+- **presence choreography** — circadian activity, distraction/offline gaps,
+  Gaussian typing plans, jittered read receipts (`circadian.ts`)
+- **human entropy** — background typing/read/presence cycles (`entropy.ts`)
+- **legitimacy signals** — QWERTY typos plus corrections, mid-typing pauses
+  (`imperfection.ts`)
+- **content variation** — zero-width characters, punctuation, synonyms
+  (`imperfection.ts`)
+- **read-receipt variance** — Gaussian receipt delay (`imperfection.ts`)
+- **device fingerprint** — per-session `appVersion`/OS/model (`fingerprint.ts`)
+- **egress rotation** — proxy selection with quarantine (`rotation.ts`)
+- **presets** — named pacing postures (`presets.ts`)
+
+They are exported from `nyx-baileys/antiban` and their plugin factories from the
+package root, but **nothing is enabled unless you call it** — the default chain
+is unchanged. Read [`ANTIBAN.md`](./ANTIBAN.md).
+
+One subset is **still not ported, even as opt-in**: `replyRatio`,
+`reputationVoucher` and `contactGraph`. Their only function is to fabricate a
+history of interaction that did not happen, or to decide who you may talk to.
+That crosses from "look less robotic" into "manufacture a record", and it stays
+out. `sessionFingerprint` is folded into `fingerprint.ts` rather than ported as
+a second, overlapping module.
 
 Some of those files sit beside genuinely good engineering — a queue, a breaker,
 a canonicalizer. The split is by intent, exactly as §"Why the split matters"
-says: port the queue, decline the performance.
+says: port the queue (which we did, into `core/`), and keep the performance
+separable and opt-in (which we did, into `antiban/`).
 
 ### Already covered
 

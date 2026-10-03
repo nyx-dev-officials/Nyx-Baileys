@@ -1,5 +1,6 @@
 import { downloadMediaMessage, getContentType, proto } from '@whiskeysockets/baileys';
 
+import { sendAlbum, type AlbumItemContent, type SendAlbumOptions, type SendAlbumResult } from '../core/album.js';
 import { associationOf, firstMedia, mimeOf, parentKeyOf } from '../core/media.js';
 
 import type { WAMessage } from '@whiskeysockets/baileys';
@@ -181,9 +182,14 @@ export function albumHandler(): Plugin {
           ctx.sock.ev.on('nyx.album' as never, handler as never);
         });
 
+      /** Send an album: parent stub, then each item linked back to it. */
+      const send = (jid: string, items: readonly AlbumItemContent[], opts?: SendAlbumOptions): Promise<SendAlbumResult> =>
+        sendAlbum(ctx.sock as never, jid, items, opts);
+
       Object.defineProperty(ctx.sock, 'albums', { value: albums, enumerable: false, configurable: true });
       Object.defineProperty(ctx.sock, 'expandAlbum', { value: expand, enumerable: false, configurable: true });
       Object.defineProperty(ctx.sock, 'waitForAlbum', { value: waitFor, enumerable: false, configurable: true });
+      Object.defineProperty(ctx.sock, 'sendAlbum', { value: send, enumerable: false, configurable: true });
 
       void ({} as proto.IWebMessageInfo);
       log.debug('attached');

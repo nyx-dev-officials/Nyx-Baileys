@@ -73,6 +73,13 @@ export {
   PayloadTooLargeError,
   isNyxError,
 } from './core/errors.js';
+export { buildAlbumParent, inferAlbumCounts, sendAlbum } from './core/album.js';
+export type {
+  AlbumItemContent,
+  AlbumSendSocket,
+  SendAlbumOptions,
+  SendAlbumResult,
+} from './core/album.js';
 export {
   bareJid,
   canonicalThreadKey,
@@ -104,6 +111,17 @@ export { autoReconnect } from './plugins/reconnect.js';
 export { sessionRepair } from './plugins/session-repair.js';
 export { clockSync } from './plugins/clock-sync.js';
 export { delivery } from './plugins/delivery.js';
+
+/* ── opt-in anti-ban plugin pack (see docs/ANTIBAN.md) ───────────── */
+export {
+  antibanPlugins,
+  contentVariation,
+  humanEntropy,
+  legitimacySignals,
+  presenceChoreography,
+  readReceiptVariancePlugin,
+} from './plugins/antiban.js';
+export * from './antiban/index.js';
 
 export { code, compose, preformatted, table } from './utils/compose.js';
 export { createLogger, silentLogger } from './utils/logger.js';

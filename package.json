@@ -21,6 +21,8 @@
     "./security": "./dist/security/index.js",
     "./integrations": "./dist/integrations/index.js",
     "./integrations/*": "./dist/integrations/*.js",
+    "./antiban": "./dist/antiban/index.js",
+    "./antiban/*": "./dist/antiban/*.js",
     "./cli": "./dist/cli/index.js",
     "./cli/*": "./dist/cli/*.js"
   },

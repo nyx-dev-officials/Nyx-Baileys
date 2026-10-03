@@ -74,18 +74,21 @@ Full detail: [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ```
 src/
-  index.ts           public surface (51 exports) + demo main()
+  index.ts           public surface (500+ exports) + demo main()
   nyxBaileys.ts    the wrapper class: lifecycle, plugin chain, rebuild
-  core/              socket · intercept · nodes · media · session-store
-  plugins/           11 default plugins + 10 opt-in
+  core/              socket · intercept · nodes · media · session-store ·
+                     clock · delivery · retry · errors · jid · album
+  plugins/           13 default plugins + 10 opt-in feature plugins
+  antiban/           opt-in anti-ban engines — see docs/ANTIBAN.md
+  integrations/      keyless HTTP integrations + Indonesian localisation
   utils/             types · compose · logger
   adapters/          SessionStore: sqlite · mongo · prisma · redis
   multi/             SessionManager — one process, N accounts
   security/          validate · redact · permissions · acl · audit
   cli/               args · output
-tests/               16 node:test suites, 249 tests
+tests/               19 node:test suites, 286 tests
 docs/                this file, ARCHITECTURE, PLUGIN-API, FEATURES,
-                     DESIGN-NOTES, VERIFICATION, REF-FINDINGS
+                     DESIGN-NOTES, VERIFICATION, REF-FINDINGS, ANTIBAN
 ```
 
 The default chain, in `order`: `stealth` 10 · `clock-sync` 15 · `lid-router` 20
@@ -142,7 +145,7 @@ text was silently dropped on the wire. Every fix has a regression test in
 
 The verify chain is green as of 2026-10-03: `npm run check` and `npm run build`
 exit 0 under `strict` + `noUncheckedIndexedAccess`, and `npm test` reports
-**249 tests, 249 pass, 0 fail** in ~2.4s.
+**286 tests, 286 pass, 0 fail** in ~3.8s.
 
 The suite covers the primitives that everything else depends on — interception
 chaining and unwind, native-flow serialisation, album linkage, the jitter queue,
@@ -151,22 +154,22 @@ runs against fake sockets. Nothing here has been exercised against a live paired
 account, so poll votes, newsletters and client-side form rendering are
 unverified end to end.
 
-Two functional limits, stated plainly:
+A few functional limits, stated plainly:
 
-- **Albums can be received but not sent.** `createAlbumContainer()` emits the
-  parent stub and the plugin assembles incoming albums, but there is no
-  `sendAlbum()`. `FEATURES.md` T11.
 - **The warm-up ramp only advances on the hour.** It re-evaluates on a one-hour
   interval rather than continuously, so the multiplier can lag the true session
   age by up to an hour.
+- **Flow state is in memory**, so a restart drops in-flight conversations.
+- **Group policy is report-only.** There is no enforcement surface; the framework
+  supplies a signal and a hook, and the decision stays with the operator.
+- **The anti-ban pack is opt-in and its effect is not measurable here.** Its
+  mechanics are unit-tested; whether it actually helps an account is not
+  something this repository can claim. [`ANTIBAN.md`](./ANTIBAN.md).
 
 The project was named "Super Baileys" until v0.1.0. `SuperBaileys` and
 `createSuperBaileys` remain as deprecated aliases for one release so the rename
 is not a breaking change; internal event namespaces moved from `super.*` to
 `nyx.*`, which *is* breaking for anyone subscribing to them.
-- **Flow state is in memory**, so a restart drops in-flight conversations.
-- **Group policy is report-only.** There is no enforcement surface; the framework
-  supplies a signal and a hook, and the decision stays with the operator.
 
 And the deliberate one:
 
@@ -185,6 +188,7 @@ And the deliberate one:
 | [`DESIGN-NOTES.md`](./DESIGN-NOTES.md) | The five refused features, what was built instead, and why |
 | [`VERIFICATION.md`](./VERIFICATION.md) | Coverage matrix and the defect report that started all this |
 | [`REF-FINDINGS.md`](./REF-FINDINGS.md) | Survey of 12 reference forks: 40 portable techniques, 15 classified EVASION |
+| [`ANTIBAN.md`](./ANTIBAN.md) | The opt-in anti-ban module set: what it does, how to enable it, and what is deliberately not ported |
 
 ## License
 
