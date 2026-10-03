@@ -98,6 +98,52 @@ export {
 } from './core/jid.js';
 export type { JidKind } from './core/jid.js';
 
+/* ── pure bot primitives (also on `nyx-baileys/lite`) ───────────────── */
+
+export {
+  CorruptStoreError,
+  JsonStore,
+  openStore,
+} from './core/store.js';
+export type {
+  Document,
+  JsonStoreOptions,
+  JsonStoreStats,
+} from './core/store.js';
+
+export {
+  CronError,
+  Scheduler,
+  cronMatches,
+  nextCronTime,
+  parseCron,
+} from './core/tasks.js';
+export type {
+  CronSchedule,
+  ScheduledTask,
+  TaskKind,
+  TaskOptions,
+} from './core/tasks.js';
+
+export { ConversationStore } from './core/conversation.js';
+export type {
+  ConversationEntry,
+  ConversationOptions,
+} from './core/conversation.js';
+
+export {
+  extractMentions,
+  extractQuoted,
+  extractText,
+  parseCommandArgs,
+  parseIncoming,
+} from './core/mention.js';
+export type {
+  ParseOptions,
+  ParsedCommand,
+  QuotedMessage,
+} from './core/mention.js';
+
 export { antiSpam } from './plugins/antiSpam.js';
 export { stealth } from './plugins/stealth.js';
 export { warmup, rampFor } from './plugins/warmup.js';
@@ -132,6 +178,7 @@ export * from './utils/time.js';
 export * from './utils/args.js';
 export * from './utils/cache.js';
 export * from './utils/queue.js';
+export * from './utils/validate.js';
 
 /* ── engine surface ────────────────────────────────────────────────────
  *

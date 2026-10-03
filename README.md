@@ -90,20 +90,56 @@ Cold import, on this machine (Node 24):
 
 | Entry | Time | Heap | Exports |
 |---|---|---|---|
-| `nyx-baileys` (root) | ~1286 ms | ~22.0 MB | 539 |
-| `nyx-baileys/lite` | ~50 ms | ~1.3 MB | 120 |
+| `nyx-baileys` (root) | ~931 ms | ~26.2 MB | 600 |
+| `nyx-baileys/lite` | ~48 ms | ~5.4 MB | 148 |
 
-That is **~96% faster and ~95% lighter** for a script that never opens a socket.
+That is **~95% faster and ~79% lighter** for a script that never opens a socket.
 
-Two other costs were attacked. The default plugin chain's per-message overhead
-was measured at **2.33 µs/message** and is now **~1.25 µs/message** on the same
-synthetic load, because memory GC used to call a full `sweep()` once *per
-message* — and each sweep walks every chat — instead of once *per batch*. Run it
-yourself:
+### The inbound hot path
+
+The other cost is per-message work on `messages.upsert`. Profiling 100k messages
+across 500 chats showed the chain spending its time on **garbage**, not on
+logic — three allocations per message, each costing more than the work around
+it:
+
+- **memory GC** enforced the per-chat cap by allocating a fresh array on every
+  message past the cap. The allocation, not the copy, was the cost: 1.05 µs per
+  message against 0.07 µs for the push alone. Dropping the oldest entry with
+  `shift` (a memmove, no allocation) costs 0.145 µs. It also no longer walks
+  every chat on the upsert path.
+- **Clock sync** allocated a `{ rtt, skew }` object per sample and memmoved the
+  window on every push. It is now a fixed-capacity `Float64Array` ring.
+- **Media lookup** probed all seven rc14 media fields per message. Seven *misses*
+  against a megamorphic shape cost more than walking the keys the message
+  actually has — 202 ns → 32 ns on a bare `{ conversation }`.
+
+| | Before | After |
+|---|---|---|
+| Default chain, per message | 1.44 µs | **~0.36 µs** |
+
+That is **~75% less overhead per inbound message**. Run either bench yourself:
 
 ```bash
-npm run bench -- 100000 500
+npm run bench -- 100000 500        # chain overhead, best of 7 trials
+node --expose-gc bench/plugin-profile.mjs 100000 500   # which plugin costs what
 ```
+
+Both report the **minimum across trials** with a forced GC between them, and
+attribute cost per plugin *in isolation* — measuring plugins cumulatively
+attributes a GC pause to whichever step follows it, which produces impossible
+negative "savings".
+
+### Engine-free bot primitives
+
+`nyx-baileys/lite` also carries the modules a script author needs before a
+socket exists, all of them pure:
+
+| Module | What it is |
+|---|---|
+| `JsonStore` | persistent JSON document, debounced autosave, atomic writes |
+| `Scheduler` | interval / one-shot / five-field cron, with contained failures |
+| `ConversationStore` | per-user state with a TTL and a hard size ceiling |
+| `parseIncoming` | text, mentions, quoted reply and command/argument parsing |
 
 ## Project layout
 

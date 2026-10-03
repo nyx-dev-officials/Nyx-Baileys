@@ -73,11 +73,18 @@ export { createLogger, silentLogger } from './utils/logger.js';
 /* ── pure text and display helpers ───────────────────────────────────── */
 export * from './utils/text.js';
 export * from './utils/format.js';
+
+/* ── engine-free bot primitives ─────────────────────────────────────── */
+export * from './core/store.js';
+export * from './core/tasks.js';
+export * from './core/conversation.js';
+export * from './core/mention.js';
 export * from './utils/random.js';
 export * from './utils/time.js';
 export * from './utils/args.js';
 export * from './utils/cache.js';
 export * from './utils/queue.js';
+export * from './utils/validate.js';
 
 /* ── anti-ban engines (pure) ─────────────────────────────────────────── */
 export * from './antiban/index.js';
