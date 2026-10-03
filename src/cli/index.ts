@@ -1,7 +1,7 @@
 /**
- * Super Baileys CLI — public surface.
+ * Nyx-Baileys CLI — public surface.
  *
- * The launcher (`bin/super-baileys.js`) imports `main` from `./main.js`; this
+ * The launcher (`bin/nyx-baileys.js`) imports `main` from `./main.js`; this
  * barrel exists so the CLI can be embedded in another program or scripted
  * against a test without reaching into individual modules.
  */

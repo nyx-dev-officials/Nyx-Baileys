@@ -740,7 +740,7 @@ export function gateInbound(
 export interface ValidationGateOptions {
   /** Max inbound text length before rejection. Default 4096. */
   readonly maxTextLength?: number;
-  /** Emit `super.invalidInput` for rejected messages. Default true. */
+  /** Emit `nyx.invalidInput` for rejected messages. Default true. */
   readonly emitRejections?: boolean;
   /** Called for every rejected message, after the event. */
   readonly onReject?: (result: InboundGateResult) => void;
@@ -752,13 +752,13 @@ export interface ValidationGateOptions {
  * Being honest about the limit: Baileys' `ev` emitter has no cancellation, so
  * a `messages.upsert` listener cannot stop other listeners from also receiving
  * the message. A plugin that genuinely needs to drop a message has to
- * subscribe to `super.invalidInput` and act itself. So this is an *observer, a
+ * subscribe to `nyx.invalidInput` and act itself. So this is an *observer, a
  * source of validated data, and an audit signal* — not an interception point.
  * Better to say that than to imply a chokepoint that does not exist.
  *
  * Concretely it: validates every inbound frame against the jid and text gates
  * above, publishes `sock.validate` so callers reuse the same gate instead of
- * re-deriving it, and emits one `super.invalidInput` per rejection with the
+ * re-deriving it, and emits one `nyx.invalidInput` per rejection with the
  * reason attached.
  */
 export function validationGate(options: ValidationGateOptions = {}): Plugin {
@@ -796,7 +796,7 @@ export function validationGate(options: ValidationGateOptions = {}): Plugin {
           log.debug('inbound rejected', { reason: result.reason });
 
           if (emitRejections) {
-            ctx.sock.ev.emit('super.invalidInput' as never, result as never);
+            ctx.sock.ev.emit('nyx.invalidInput' as never, result as never);
           }
           options.onReject?.(result);
         }

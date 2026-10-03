@@ -21,7 +21,7 @@ const OTHER_GROUP = '999-888@g.us';
 function rig(options = {}) {
   const sock = fakeSocket();
   const seen = [];
-  sock.ev.on('super.groupAlert', (alert) => seen.push(alert));
+  sock.ev.on('nyx.groupAlert', (alert) => seen.push(alert));
   const harness = applyPlugin(groupGuard(options), sock);
   return { sock, seen, alerts: sock.groupAlerts, admins: sock.groupAdmins, ...harness };
 }

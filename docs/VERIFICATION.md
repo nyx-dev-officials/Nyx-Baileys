@@ -1,4 +1,4 @@
-# VERIFICATION — super-baileys 0.1.0
+# VERIFICATION — nyx-baileys 0.1.0
 
 Date: 2026-10-03 · Upstream: `@whiskeysockets/baileys@7.0.0-rc14` · Node v24.19.0 · TypeScript 7.0.2 (global)
 
@@ -70,11 +70,11 @@ defects below.
 | 8 | Chat flow state machine | **COVERED** | `src/plugins/flow.ts:144` (`run`), `:161` (`start`), `:180` (upsert dispatch), `:229` (`sock.flows`). |
 | 9 | Memory GC store | **PARTIAL** | `src/plugins/memory.ts:60` sweep, `:89` upsert hook, `:112` `sock.store`. Media eviction at `:73-79` is inverted (D7). |
 | 10 | Multi-device payload normaliser | **PARTIAL — dead code** | `src/plugins/session-repair.ts:55` (`unwrap`) and `:81` (`repairFlow`) are both sound against rc14 and **proven not to run** because patch stacking is broken (D3). |
-| 11 | Multi-session core | **PARTIAL** | `src/superBaileys.ts:33` class, `:291` factory, `:135` `#rebuild`. Per-session state leaks: `#disposables` is shared across rebuilds and never reset (D8). |
+| 11 | Multi-session core | **PARTIAL** | `src/nyxBaileys.ts:33` class, `:291` factory, `:135` `#rebuild`. Per-session state leaks: `#disposables` is shared across rebuilds and never reset (D8). |
 | 12 | SQL/NoSQL session bridge | **COVERED** | `src/core/session-store.ts:128` `createSessionStore({load,save})` — genuine adapter. `:29` FileSessionStore, `:91` MemorySessionStore. |
-| 13 | Auto-retry backoff | **COVERED (not in default chain)** | `src/plugins/reconnect.ts:63` (full-jitter exp), `:68` (`schedule`), `:121-163` reason switch. Imported at `superBaileys.ts:18` but **absent from `plugins()`** (D9) — dead unless registered. |
+| 13 | Auto-retry backoff | **COVERED (not in default chain)** | `src/plugins/reconnect.ts:63` (full-jitter exp), `:68` (`schedule`), `:121-163` reason switch. Imported at `nyxBaileys.ts:18` but **absent from `plugins()`** (D9) — dead unless registered. |
 | 14 | Media streaming optimizer | **PARTIAL** | `src/plugins/media-stream.ts:59` size ceiling with typed `MediaTooLargeError`, `:95` `streamTo`. Not streaming: full buffer materialised first, then sliced (D10). |
-| 15 | Group management / security | **PARTIAL** | `src/plugins/group.ts:73` mass-add window, `:93` privilege tracking, `:54` `super.groupAlert`. Privilege check is tautological (D6). Read-only by design — no enforcement surface. |
+| 15 | Group management / security | **PARTIAL** | `src/plugins/group.ts:73` mass-add window, `:93` privilege tracking, `:54` `nyx.groupAlert`. Privilege check is tautological (D6). Read-only by design — no enforcement surface. |
 
 **Totals: 6 COVERED · 8 PARTIAL · 1 MISSING**
 
@@ -224,11 +224,11 @@ goto: (name) => {
 ### D5 — HIGH · `index.ts` pairing path never awaits credential persistence
 `src/index.ts:220-226`, and `src/core/socket.ts:102`
 
-`saveCreds` is threaded from `store.init()` (`superBaileys.ts:102`) through
+`saveCreds` is threaded from `store.init()` (`nyxBaileys.ts:102`) through
 `createCoreSocket` (`socket.ts:108`) and then **discarded** at `socket.ts:102`:
 
 ```ts
-void saveCreds; // owned by the caller (SuperBaileys), not the socket factory
+void saveCreds; // owned by the caller (NyxBaileys), not the socket factory
 ```
 
 Grep confirms **no `creds.update` → `saveCreds` listener is registered anywhere** in
@@ -244,7 +244,7 @@ Consequence: paired credentials are never written to disk. Every restart re-pair
 This is the single most user-visible defect in the framework and it is entirely
 silent.
 
-Fix — in `SuperBaileys.#connect`, after the socket exists:
+Fix — in `NyxBaileys.#connect`, after the socket exists:
 
 ```ts
 const offCreds = sock.ev.on('creds.update', () => { void saveCreds(); });
@@ -298,7 +298,7 @@ fix the comment to match what the code does.
 ---
 
 ### D8 — MEDIUM · `#disposables` is never reset across rebuilds
-`src/superBaileys.ts:140` and `:43`
+`src/nyxBaileys.ts:140` and `:43`
 
 `Disposables.dispose()` (`intercept.ts:149-159`) pops every item, so the array does
 drain — but `#rebuild()` calls `dispose()` and then `#connect()` → `decorate()` →
@@ -315,7 +315,7 @@ entries.
 ---
 
 ### D9 — MEDIUM · `autoReconnect` is imported but never in the default chain
-`src/superBaileys.ts:18` vs `:57-68`
+`src/nyxBaileys.ts:18` vs `:57-68`
 
 ```ts
 import { autoReconnect } from './plugins/reconnect.js';   // line 18
@@ -325,7 +325,7 @@ import { autoReconnect } from './plugins/reconnect.js';   // line 18
 antiSpam, flow, warmup — **no reconnect**. Verified by parsing the returned array.
 
 Consequences: `sock.health()` (advertised in `index.ts:296`) is `undefined`; no
-auto-reconnect happens; `__requestReconnect` (`superBaileys.ts:116`) is defined but
+auto-reconnect happens; `__requestReconnect` (`nyxBaileys.ts:116`) is defined but
 never invoked. Role 13 is dead code in the default configuration.
 
 Fix — add `autoReconnect()` to the chain. Note it declares `order: 70`
@@ -380,7 +380,7 @@ never updates `expected`, so `completedAt` is never set and `waitFor` times out
 ### D13 — LOW · `main()` installs a second `connection.update` listener
 `src/index.ts:301-306`
 
-`SuperBaileys.#wireConnection` (`superBaileys.ts:193`) is documented as the single
+`NyxBaileys.#wireConnection` (`nyxBaileys.ts:193`) is documented as the single
 owner of that event. `main()` adds its own that calls `client.dispose()` on close,
 which will also fire when reconnect (once D9 is fixed) tears the socket down
 mid-rebuild. Latent until D9 lands.
@@ -392,7 +392,7 @@ mid-rebuild. Latent until D9 lands.
 The user asked specifically. Findings:
 
 **Order is fine.** `antiSpam` is `order: 80` (`antiSpam.ts:35`), `warmup` is
-`order: 100` (`warmup.ts:29`), and `decorate()` (`superBaileys.ts:176`) iterates
+`order: 100` (`warmup.ts:29`), and `decorate()` (`nyxBaileys.ts:176`) iterates
 `this.plugins()` in array order. `__antispam` is assigned at `antiSpam.ts:120`
 during `apply`, which completes before `warmup.apply` reads it at `warmup.ts:49-51`.
 The coupling holds.

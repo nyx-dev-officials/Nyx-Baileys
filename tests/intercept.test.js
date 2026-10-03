@@ -275,8 +275,8 @@ test('patchAll composes every wrapper it is given', () => {
  *
  * Not hypothetical: `sessionRepair` and `antiSpam` each patch BOTH
  * `sendMessage` AND `relayMessage` on the same socket, and
- * `SuperBaileys.#rebuild()` calls `#disposables.dispose()` before reconnecting
- * (src/superBaileys.ts:141). After a rebuild the old socket has no
+ * `NyxBaileys.#rebuild()` calls `#disposables.dispose()` before reconnecting
+ * (src/nyxBaileys.ts:141). After a rebuild the old socket has no
  * `relayMessage` at all, so `sock.relayMessage(...)` throws
  * "sock.relayMessage is not a function".
  *
@@ -317,7 +317,7 @@ test('BUG: undoing a second method on the same target restores the true original
 /*
  * ---------------------------------------------------------------------------
  * KNOWN BUG — same root cause, seen through the dispose path
- * `SuperBaileys.dispose()` / `#rebuild()` actually uses.
+ * `NyxBaileys.dispose()` / `#rebuild()` actually uses.
  * ---------------------------------------------------------------------------
  */
 test('BUG: Disposables.dispose() restores every patched method, not just the first', () => {

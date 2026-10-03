@@ -11,7 +11,7 @@ dist/
 # git history does not forget.
 session/
 sessions/
-.super-baileys-tmp/
+.nyx-baileys-tmp/
 creds.json
 app-state-sync-key-*.json
 pre-key-*.json
@@ -29,7 +29,7 @@ store.json
 refs/
 
 # CLI local state
-.super-baileys/
+.nyx-baileys/
 
 # Logs and scratch
 *.log

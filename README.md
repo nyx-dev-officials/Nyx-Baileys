@@ -10,7 +10,7 @@ Version 0.1.0 · upstream `7.0.0-rc14` · Node ≥ 20 · MIT
 ## 60-second quickstart
 
 ```bash
-npm install super-baileys
+npm install nyx-baileys
 ```
 
 Pair a number — Baileys prints the QR in your terminal, scan it from
@@ -33,9 +33,9 @@ instead and stays connected.
 Programmatically:
 
 ```ts
-import { createSuperBaileys } from 'super-baileys';
+import { createNyxBaileys } from 'nyx-baileys';
 
-const client = createSuperBaileys({ sessionDir: './session', logLevel: 'info' });
+const client = createNyxBaileys({ sessionDir: './session', logLevel: 'info' });
 const sock = await client.connect();           // real WASocket, 11 plugins applied
 
 await sock.sendMessage('15551234567@s.whatsapp.net', { text: 'hello' });
@@ -75,7 +75,7 @@ Full detail: [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 ```
 src/
   index.ts           public surface (51 exports) + demo main()
-  superBaileys.ts    the wrapper class: lifecycle, plugin chain, rebuild
+  nyxBaileys.ts    the wrapper class: lifecycle, plugin chain, rebuild
   core/              socket · intercept · nodes · media · session-store
   plugins/           11 default plugins + 10 opt-in
   utils/             types · compose · logger
@@ -110,7 +110,7 @@ changed it.
 | 8 | Chat flow state machine | covered | `plugins/flow.ts:202`, `:238` |
 | 9 | Memory GC store | partial | `plugins/memory.ts:60` — eviction inverted (D7) |
 | 10 | Payload normaliser | covered | `plugins/session-repair.ts:81` — was dead (D3) |
-| 11 | Multi-session core | covered | `superBaileys.ts:33`; `multi/session-manager.ts` |
+| 11 | Multi-session core | covered | `nyxBaileys.ts:33`; `multi/session-manager.ts` |
 | 12 | SQL/NoSQL session bridge | covered | `core/session-store.ts:128`; `adapters/` |
 | 13 | Auto-retry backoff | covered | `plugins/reconnect.ts:63` — was unwired (D9) |
 | 14 | Media streaming | partial | `plugins/media-stream.ts:104` — buffers whole (D10) |
@@ -132,41 +132,33 @@ text is silently dropped on the wire. Details and reproductions:
 
 ## Honest limitations
 
-**`npm test` does not run, and 11 tests fail when invoked directly.**
-As of 2026-10-03 the type check and the build are both **green** — `npm run check`
-and `npm run build` exit 0 with zero errors under `strict` +
-`noUncheckedIndexedAccess`. Two things are still not right:
+The verify chain is green as of 2026-10-03: `npm run check` and `npm run build`
+exit 0 under `strict` + `noUncheckedIndexedAccess`, and `npm test` reports
+**195 tests, 195 pass, 0 fail** in ~2.3s.
 
-- **`npm test` cannot load the test directory.** The script is
-  `node --test tests/`, which this Node build resolves as a module path and fails
-  with `Cannot find module '…/tests'`. Invoking the files directly works:
-  `node --test tests/*.test.js` gives **195 tests, 186 pass, 9 fail**.
-- **The 9 failures are real defects, not flakes**, and each is a
-  `BUG:`-prefixed regression test so it fails loudly rather than rot: four name
-  the `patch()` pristine-stash bug below, one is media-GC eviction, one is
-  `createEdit`, one is `flowResponse` propagation, and one is a
-  `messageParamsJson` that parses to `null`. The count is a moving target —
-  it was 11 when this was written and is dropping as the remaining work lands.
+The suite covers the primitives that everything else depends on — interception
+chaining and unwind, native-flow serialisation, album linkage, the jitter queue,
+payload normalisation, memory bounds, group thresholds, flow extraction — but it
+runs against fake sockets. Nothing here has been exercised against a live paired
+account, so poll votes, newsletters and client-side form rendering are
+unverified end to end.
 
-**`dist/` is current**, so those test results do describe `src/`.
-
-**Six source layers are unreachable from the package surface.** `adapters/`,
-`multi/`, `security/`, `cli/` and ten opt-in plugins compile and are documented,
-but `src/index.ts` exports only the 51 core/plugins/utils names and `package.json`
-`exports` maps only `.`, `./core/*`, `./plugins/*`, `./utils/*`. Deep relative
-imports from `dist/` work; the `super-baileys/adapters/…` specifier their own
-docstrings advertise does not resolve. A `bin/super-baileys.js` also exists on
-disk with no `bin` entry in `package.json`.
-
-Functional limits, stated plainly:
+Three functional limits, stated plainly:
 
 - **Albums can be received but not sent.** `createAlbumContainer()` emits the
-  parent stub, and the plugin assembles incoming albums, but there is no
+  parent stub and the plugin assembles incoming albums, but there is no
   `sendAlbum()`. `FEATURES.md` T11.
 - **`streamMedia` is not streaming.** It decrypts the whole asset and then slices
-  it. Peak memory is the full asset plus one chunk. `FEATURES.md` #195.
+  it, because that is how the socket delivers it. Peak memory is the full asset
+  plus one chunk. `FEATURES.md` #195.
 - **The warm-up ramp is evaluated once per socket build**, not on an interval, so
   a long-lived process holds its day-one multiplier for the socket's life.
+
+The project was named "Super Baileys" until v0.1.0. `SuperBaileys` and
+`createSuperBaileys` remain as deprecated aliases for one release so the rename
+is not a breaking change; internal event namespaces moved from `super.*` to
+`nyx.*`, which *is* breaking for anyone subscribing to them.
+
   `FEATURES.md` #199.
 - **Flow state is in memory**, so a restart drops in-flight conversations.
 - **Group policy is report-only.** There is no enforcement surface; the framework

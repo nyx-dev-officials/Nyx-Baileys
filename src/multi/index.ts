@@ -1,7 +1,7 @@
 /**
  * Multi-session fleet.
  *
- * `SessionManager` runs N independent `SuperBaileys` accounts in one Node
+ * `SessionManager` runs N independent `NyxBaileys` accounts in one Node
  * process, each with its own socket, auth directory, plugin instances and log
  * scope:
  *

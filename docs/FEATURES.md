@@ -1,6 +1,6 @@
 # FEATURES — 250 entries
 
-Super Baileys 0.1.0 · snapshot 2026-10-03, 51 TypeScript files under `src/`,
+Nyx-Baileys 0.1.0 · snapshot 2026-10-03, 51 TypeScript files under `src/`,
 21 plugin modules (11 in the default chain)
 
 ## How to read this
@@ -72,7 +72,7 @@ re-proposes them.
 |---|---|---|---|
 | 9 | Runtime method patching | `core` | `patch(target, name, wrapper)` replaces a method on a live object at runtime. `core/intercept.ts:43-85` |
 | 10 | Wrapper chaining | `core` | The wrapper receives the *current* implementation, so A-then-B gives `B(A(orig))` and both plugins run. `core/intercept.ts:48`, `:72-74` |
-| 11 | Pristine stash and exact undo | `core` | Keeps a pristine copy on `Symbol.for('super-baileys.pristine')` so teardown restores the true original. `core/intercept.ts:19`, `:57-68` |
+| 11 | Pristine stash and exact undo | `core` | Keeps a pristine copy on `Symbol.for('nyx-baileys.pristine')` so teardown restores the true original. `core/intercept.ts:19`, `:57-68` |
 | 12 | Silent no-apply on a missing method | `core` | Returns `{applied:false}` and changes nothing rather than throwing; the caller decides. `core/intercept.ts:50-52` |
 | 13 | Multi-method patch unit | `core` | `patchAll()` registers one disposer covering every method it touched. `core/intercept.ts:88-112` |
 | 14 | Detachable listener helper | `core` | `listen()` wraps `ev.on` and returns an `off` that tolerates a torn-down emitter. `core/intercept.ts:122-137` |
@@ -119,25 +119,25 @@ re-proposes them.
 | 40 | `createSessionStore()` | `core` | Wraps any sync-or-async `load`/`save` pair as a store — the adapter for Mongo, Postgres or Redis. `core/session-store.ts:128-165` |
 | 41 | `clear()` wipe | `core` | Removes the session directory; the next start requires a fresh pairing. `core/session-store.ts:81-84` |
 
-## superBaileys / lifecycle (15)
+## nyxBaileys / lifecycle (15)
 
 | # | Name | Layer | What it does |
 |---|---|---|---|
-| 42 | `SuperBaileys` wrapper class | `core` | Owns the socket lifecycle and the plugin chain; the returned socket is a real `WASocket`. `superBaileys.ts:33-289` |
-| 43 | `createSuperBaileys()` factory | `core` | One isolated instance per session number. `superBaileys.ts:292-294` |
-| 44 | Connect concurrency guard | `core` | Simultaneous `connect()` callers share one in-flight attempt rather than opening two sockets. `superBaileys.ts:86-92` |
-| 45 | Disposed-instance guard | `core` | `connect()` after `dispose()` throws via `invariant`, it does not silently reopen. `superBaileys.ts:95` |
-| 46 | Default 11-plugin chain | `plugins` | `plugins()` returns stealth, lid, media, album, memory, group, repair, reconnect, anti-spam, flow, warmup in `order`. `superBaileys.ts:56-70` |
-| 47 | `registerPlugin()` | `core` | Appends a plugin and re-sorts by `order`, redefining the instance's own chain so instances cannot contaminate each other. `superBaileys.ts:76-80` |
-| 48 | Per-plugin failure isolation | `core` | A plugin that throws is logged by name and skipped; the socket survives. `superBaileys.ts:182-188` |
-| 49 | `applied[]` diagnostics | `core` | Names of plugins that actually applied, in application order. `superBaileys.ts:41`, `:180` |
-| 50 | `patchCount` observability | `core` | Outstanding disposer count — the cheapest assertion that decoration happened. `superBaileys.ts:286-288` |
-| 51 | `#rebuild()` unwind-then-redecorate | `core` | Disposes every patch before rebuilding, so wrappers never stack across reconnect cycles. `superBaileys.ts:136-161` |
-| 52 | Cold rebuild from the store | `core` | Rebuilds from persisted auth state, never from memory — a reconnect is the same path as a cold start. `superBaileys.ts:150-156` |
-| 53 | `__requestReconnect` bridge | `core` | The host exposes a rebuild function so the reconnect plugin never owns the connect path. `superBaileys.ts:115-121` |
-| 54 | Single `connection.update` owner | `core` | `#wireConnection()` is the one place that reads connection phase and records `connectionState`. `superBaileys.ts:193-220` |
-| 55 | `onConnection()` fan-out | `core` | Plugins subscribe here instead of adding listeners; each listener's throw is isolated. `superBaileys.ts:229-232`, `:234-242` |
-| 56 | Event passthrough with unsubscribe | `core` | `on()` returns an unsubscribe function; `ev` and `user` forward to the live socket. `superBaileys.ts:252-265` |
+| 42 | `NyxBaileys` wrapper class | `core` | Owns the socket lifecycle and the plugin chain; the returned socket is a real `WASocket`. `nyxBaileys.ts:33-289` |
+| 43 | `createNyxBaileys()` factory | `core` | One isolated instance per session number. `nyxBaileys.ts:292-294` |
+| 44 | Connect concurrency guard | `core` | Simultaneous `connect()` callers share one in-flight attempt rather than opening two sockets. `nyxBaileys.ts:86-92` |
+| 45 | Disposed-instance guard | `core` | `connect()` after `dispose()` throws via `invariant`, it does not silently reopen. `nyxBaileys.ts:95` |
+| 46 | Default 11-plugin chain | `plugins` | `plugins()` returns stealth, lid, media, album, memory, group, repair, reconnect, anti-spam, flow, warmup in `order`. `nyxBaileys.ts:56-70` |
+| 47 | `registerPlugin()` | `core` | Appends a plugin and re-sorts by `order`, redefining the instance's own chain so instances cannot contaminate each other. `nyxBaileys.ts:76-80` |
+| 48 | Per-plugin failure isolation | `core` | A plugin that throws is logged by name and skipped; the socket survives. `nyxBaileys.ts:182-188` |
+| 49 | `applied[]` diagnostics | `core` | Names of plugins that actually applied, in application order. `nyxBaileys.ts:41`, `:180` |
+| 50 | `patchCount` observability | `core` | Outstanding disposer count — the cheapest assertion that decoration happened. `nyxBaileys.ts:286-288` |
+| 51 | `#rebuild()` unwind-then-redecorate | `core` | Disposes every patch before rebuilding, so wrappers never stack across reconnect cycles. `nyxBaileys.ts:136-161` |
+| 52 | Cold rebuild from the store | `core` | Rebuilds from persisted auth state, never from memory — a reconnect is the same path as a cold start. `nyxBaileys.ts:150-156` |
+| 53 | `__requestReconnect` bridge | `core` | The host exposes a rebuild function so the reconnect plugin never owns the connect path. `nyxBaileys.ts:115-121` |
+| 54 | Single `connection.update` owner | `core` | `#wireConnection()` is the one place that reads connection phase and records `connectionState`. `nyxBaileys.ts:193-220` |
+| 55 | `onConnection()` fan-out | `core` | Plugins subscribe here instead of adding listeners; each listener's throw is isolated. `nyxBaileys.ts:229-232`, `:234-242` |
+| 56 | Event passthrough with unsubscribe | `core` | `on()` returns an unsubscribe function; `ev` and `user` forward to the live socket. `nyxBaileys.ts:252-265` |
 
 ## plugins / stealth (3)
 
@@ -175,7 +175,7 @@ re-proposes them.
 | 71 | Sibling index | `plugins` | Reads `messageIndex` from the association when the sender supplied one. `plugins/album.ts:66-67` |
 | 72 | Legacy inline fallback | `plugins` | Also reads nested `albumMessage.media`/`groupedMediaMessage.media` in case a client ships that shape. `plugins/album.ts:70-76` |
 | 73 | `expandAlbum()` | `plugins` | Decrypts one item on demand and throws rather than returning an empty buffer. `plugins/album.ts:135-157` |
-| 74 | `waitForAlbum()` + `super.album` | `plugins` | Resolves when an album completes; every change emits an event. The registry is bounded at 200. `plugins/album.ts:78-88`, `:160-174` |
+| 74 | `waitForAlbum()` + `nyx.album` | `plugins` | Resolves when an album completes; every change emits an event. The registry is bounded at 200. `plugins/album.ts:78-88`, `:160-174` |
 
 ## plugins / memory-gc (5)
 
@@ -194,7 +194,7 @@ re-proposes them.
 | 80 | Mass-add detection | `plugins` | Flags 8+ joins inside 10 minutes per group; counts join timestamps, not jids. `plugins/group.ts:73-91` |
 | 81 | Privilege tracking | `plugins` | `[partial]` Maintains an observed-admin set per group. The check is a counter, not a detector — `known >= 3` means "three promote events", not "every member is an admin". `plugins/group.ts:101-112` |
 | 82 | `allow()` group filter | `plugins` | Ignores groups not on an allowlist. `plugins/group.ts:66` |
-| 83 | `groupAlerts` + event | `plugins` | Bounded at 100, emitted as `super.groupAlert`. `plugins/group.ts:50-55`, `:117` |
+| 83 | `groupAlerts` + event | `plugins` | Bounded at 100, emitted as `nyx.groupAlert`. `plugins/group.ts:50-55`, `:117` |
 | 84 | Report-only by design | `plugins` | Auto-kicking on a signal this noisy is how a guard becomes the incident; the hook is where an operator decides. `plugins/group.ts:12-16` |
 
 ## plugins / session-repair (5)
@@ -392,7 +392,7 @@ re-proposes them.
 > re-export them** (it exports 51 core/plugins/utils names), and **`package.json`
 > `exports` does not map them** — the map is `.`, `./core/*`, `./plugins/*`,
 > `./utils/*` only. So they are reachable by deep relative import from `dist/`
-> but not by the `super-baileys/adapters/…` specifier their own docstrings
+> but not by the `nyx-baileys/adapters/…` specifier their own docstrings
 > advertise. Both are one-line fixes in files this pass does not own.
 >
 > Ten further plugins are implemented and compiled but **opt-in** — none is in
@@ -537,10 +537,10 @@ point. **Not counted in the 250** — see the note above.
 | T3 | `injectable getMessage` | `adapters` | Already reachable via `createSessionStore`; promoting it to a first-class option is easy. `T16` |
 | T4 | Group metadata cache | `multi` | Prerequisite for #197 — the participant count that makes privilege-climb a real detector instead of a counter. |
 | T5 | Export the security/multi/adapters/cli layers from `src/index.ts` | `core` | They compile and are tested by hand but are not on the package's public surface. One file. |
-| T6 | Extend `package.json` `exports` | `core` | Currently `.`, `./core/*`, `./plugins/*`, `./utils/*`. The `super-baileys/adapters/session-mongo.js` specifier in the adapter docstrings does not resolve. One file. |
+| T6 | Extend `package.json` `exports` | `core` | Currently `.`, `./core/*`, `./plugins/*`, `./utils/*`. The `nyx-baileys/adapters/session-mongo.js` specifier in the adapter docstrings does not resolve. One file. |
 | T7 | Replace the raw NUL byte in `audit.ts` | `security` | `${body.prev}\u0000${canonicalize(body)}` writes the domain separator as a literal byte, so `file` classifies the source as binary, `git diff` treats it as binary, and some editors mangle it. The escape sequence is functionally identical. |
 | T8 | Ratchet invariant test | `core` | The five DESIGN-NOTES exclusions are enforced by convention. A test asserting no code path writes to `authState.keys` after connect would make exclusion §5 structural. |
-| T9 | Fix the stale `order` comments | `core` | `superBaileys.ts:64-65` say 70 and 75; the fields say 65 and 70. Behaviour is correct; only the comments lie. |
+| T9 | Fix the stale `order` comments | `core` | `nyxBaileys.ts:64-65` say 70 and 75; the fields say 65 and 70. Behaviour is correct; only the comments lie. |
 | T10 | Export `plugins/metrics.ts` from the root | `plugins` | It is not in `plugins()` and not re-exported, so it is currently reachable only by deep import. |
 | T11 | Send-side album helper on the socket | `core` | `sock.sendAlbum(jid, media[])` implementing #212–#217. The single largest functional gap: albums can be received but not sent. |
 | T12 | Wire `metrics` into the default chain | `plugins` | It is opt-in today. Default-on costs a small constant allocation; the cardinality ceiling makes it safe. |
@@ -549,7 +549,7 @@ point. **Not counted in the 250** — see the note above.
 | T15 | Reconnect ramp via `restartThrottle` | `plugins` | #233 as a plugin, with the maths from `T24` and none of the framing. |
 | T16 | Per-plugin configuration schema | `core` | Every built-in takes an options object with no validation. `SuperOptions` has the same gap. |
 | T17 | Disposal test matrix | `core` | Assert that after `dispose()` every patched method is byte-identical to what `makeWASocket()` returned. This is the test that would have caught #191. |
-| T18 | Emit `super.` events through a typed map | `core` | `super.album`, `super.groupAlert`, `super.approval` are emitted with `as never` casts because `.ev` is typed by Baileys. |
+| T18 | Emit `nyx.` events through a typed map | `core` | `nyx.album`, `nyx.groupAlert`, `nyx.approval` are emitted with `as never` casts because `.ev` is typed by Baileys. |
 
 ## Honest risk notes (19)
 

@@ -144,7 +144,7 @@ export function callLog(options: CallOptions = {}): Plugin {
         }
 
         log.debug('call update', { chatId, status: event.status, missed: entry.missed });
-        ctx.sock.ev.emit('super.call' as never, entry as never);
+        ctx.sock.ev.emit('nyx.call' as never, entry as never);
       };
 
       ctx.sock.ev.on('call', (event: BaileysEventMap['call']) => {

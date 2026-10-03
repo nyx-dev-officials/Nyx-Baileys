@@ -247,7 +247,7 @@ export function presence(options: PresenceOptions = {}): Plugin {
             at: Date.now(),
           });
           if (options.logInbound) log.debug('peer presence', { jid: normalised, value: data?.lastKnownPresence });
-          ctx.sock.ev.emit('super.presence' as never, { jid: normalised, ...data } as never);
+          ctx.sock.ev.emit('nyx.presence' as never, { jid: normalised, ...data } as never);
         }
         while (seen.size > maxSeen) {
           const oldest = seen.keys().next().value;

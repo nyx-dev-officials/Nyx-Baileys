@@ -117,7 +117,7 @@ export interface CreateSocketArgs {
 
 /**
  * The upstream engine, unmodified. Everything downstream decorates the object
- * this returns; nothing here is Super-Baileys-specific except tuning knobs.
+ * this returns; nothing here is Nyx-Baileys-specific except tuning knobs.
  */
 export async function createCoreSocket(args: CreateSocketArgs): Promise<CoreSocket> {
   const { state, saveCreds, options, log, tuning = {}, printQRInTerminal = true } = args;
@@ -145,7 +145,7 @@ export async function createCoreSocket(args: CreateSocketArgs): Promise<CoreSock
     authTimeoutMs: 20_000,
   } as Parameters<typeof makeWASocket>[0]);
 
-  void saveCreds; // wired by the host, see SuperBaileys
+  void saveCreds; // wired by the host, see NyxBaileys
 
   // Persist credentials. rc14 emits `creds.update` from many places and does not
   // write anything itself — without this listener a paired session is lost on

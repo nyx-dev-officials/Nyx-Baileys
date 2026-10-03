@@ -757,12 +757,12 @@ export class Quarantine {
 export interface InjectionGuardPluginOptions extends InjectionGuardOptions {
   /** Quarantine anything scoring at or above this, regardless of action. Default 1. */
   readonly quarantineAt?: number;
-  /** Also inspect `super.injectionGuard` output over flow replies. */
+  /** Also inspect `nyx.injectionGuard` output over flow replies. */
   readonly inspectFlowReplies?: boolean;
 }
 
 /**
- * Scans inbound text and emits `super.injection` for every non-`allow` verdict.
+ * Scans inbound text and emits `nyx.injection` for every non-`allow` verdict.
  *
  * What this plugin cannot do is stated at the top of this file and repeated
  * here because it is the part people get wrong: Baileys' emitter does not
@@ -819,7 +819,7 @@ export function injectionGuard(options: InjectionGuardPluginOptions = {}): Plugi
         if (verdict.action === 'block') log.warn('injection blocked', line);
         else log.debug('injection flagged', line);
 
-        ctx.sock.ev.emit('super.injection' as never, { ...verdict, jid } as never);
+        ctx.sock.ev.emit('nyx.injection' as never, { ...verdict, jid } as never);
       };
 
       const handle = (event: { messages?: unknown[] }): void => {

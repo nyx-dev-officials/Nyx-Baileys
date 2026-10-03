@@ -157,7 +157,7 @@ export function webhooks(options: WebhookOptions = {}): Plugin {
             'content-type': 'application/json',
             'x-super-event': event,
             'x-super-timestamp': timestamp,
-            'user-agent': 'super-baileys/0.1',
+            'user-agent': 'nyx-baileys/0.1',
           };
           if (endpoint.sign !== false && endpoint.secret) {
             headers['x-super-signature'] = sign(body, endpoint.secret, timestamp);

@@ -2,14 +2,14 @@ import { join } from 'node:path';
 
 import type { AnyMessageContent } from '@whiskeysockets/baileys';
 
-import { SuperBaileys } from '../superBaileys.js';
+import { NyxBaileys } from '../nyxBaileys.js';
 import { createLogger } from '../utils/logger.js';
 import type { CoreSocket, Logger, Plugin, SuperOptions } from '../utils/types.js';
 
 /**
  * Multi-session fleet manager.
  *
- * One Node process, N independent WhatsApp accounts. Each `SuperBaileys` gets
+ * One Node process, N independent WhatsApp accounts. Each `NyxBaileys` gets
  * its own socket, its own session directory, its own plugin instances and its
  * own logger scope, so a fault in one account cannot reach the others. This is
  * what turns the framework from "a single bot" into a fleet you can actually
@@ -55,7 +55,7 @@ export type SessionStatus =
 /**
  * The surface the manager actually needs from a session.
  *
- * Narrow on purpose. `SuperBaileys` satisfies it structurally, and depending on
+ * Narrow on purpose. `NyxBaileys` satisfies it structurally, and depending on
  * this instead of the concrete class is what lets the manager be driven by a
  * fake in tests without a network, and by an alternative host later. The event
  * passthroughs are included so a `SessionRecord` is genuinely useful to a
@@ -123,7 +123,7 @@ export interface SessionManagerOptions {
   logLevel?: 'silent' | 'error' | 'warn' | 'info' | 'debug';
   logger?: Logger;
   /**
-   * How a session is constructed. Defaults to `new SuperBaileys(options)`.
+   * How a session is constructed. Defaults to `new NyxBaileys(options)`.
    * The seam that lets the fleet be driven by a fake in tests, without a
    * network or a QR scan.
    */
@@ -190,7 +190,7 @@ function assertSafeId(id: string): string {
 /**
  * Re-scope an existing logger under a session id.
  *
- * `SuperBaileys` builds its own logger and exposes no injection point, and
+ * `NyxBaileys` builds its own logger and exposes no injection point, and
  * adding one is not this file's call. Decorating the instance property instead
  * is exactly the technique this framework is built on, and it must happen
  * *before* `connect()` because the socket and plugin loggers are derived from
@@ -251,7 +251,7 @@ export class SessionManager {
       openTimeoutMs: Math.max(1_000, Math.floor(options.restart?.openTimeoutMs ?? 60_000)),
     };
     this.#log = options.logger ?? createLogger(options.logLevel ?? 'info', 'fleet');
-    this.#factory = options.factory ?? ((opts) => new SuperBaileys(opts));
+    this.#factory = options.factory ?? ((opts) => new NyxBaileys(opts));
   }
 
   /* ── fleet events ────────────────────────────────────────────────────── */
@@ -683,7 +683,7 @@ export class SessionManager {
   }
 }
 
-/** Factory, mirroring `createSuperBaileys`. */
+/** Factory, mirroring `createNyxBaileys`. */
 export function createSessionManager(options: SessionManagerOptions = {}): SessionManager {
   return new SessionManager(options);
 }

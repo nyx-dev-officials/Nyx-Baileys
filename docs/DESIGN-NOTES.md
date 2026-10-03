@@ -1,6 +1,6 @@
 # DESIGN NOTES — five features that were requested and not built
 
-Super Baileys 0.1.0 · `@whiskeysockets/baileys@7.0.0-rc14` · Node ≥ 20
+Nyx-Baileys 0.1.0 · `@whiskeysockets/baileys@7.0.0-rc14` · Node ≥ 20
 
 ## Why this document exists
 
@@ -290,11 +290,11 @@ that would otherwise implement it:
 
 **What was built instead — rebuild from persisted state, one socket at a time.**
 
-- `src/superBaileys.ts:136-161` — `#rebuild()` unwinds every patch, disposes the
+- `src/nyxBaileys.ts:136-161` — `#rebuild()` unwinds every patch, disposes the
   socket and calls `#connect()` again against the same session store. State is
   never rebuilt from memory; the auth store is the source of truth, so a
   reconnect is the same code path as a cold start.
-- `src/superBaileys.ts:115-121` — the reconnect plugin asks the host to rebuild
+- `src/nyxBaileys.ts:115-121` — the reconnect plugin asks the host to rebuild
   rather than swapping the socket itself, so there is exactly one owner of the
   connect path.
 - `src/multi/session-manager.ts` — a session that cannot reach `open` is torn
@@ -337,7 +337,7 @@ reimplemented at all, and no amount of choosing differently changes that.
 | Fake account history | A real warm-up ramp, persisted so it survives restart, 8× → 1× over N days | `plugins/warmup.ts:17-24`, `:34-40`, `:48-51` |
 | Fake read receipts | Receipts only for messages genuinely received; an opt-in `read-receipts` plugin that refuses schedule-based bulk reads | `plugins/read-receipts.ts:8-26` |
 | Content injection | Structural repair of the sender's own payload, before Baileys compiles it | `plugins/session-repair.ts:55-71`, `:81-114` |
-| Live credential swap | Cold rebuild from persisted state, with disposals unwound first | `superBaileys.ts:136-161`; `multi/session-manager.ts` |
+| Live credential swap | Cold rebuild from persisted state, with disposals unwound first | `nyxBaileys.ts:136-161`; `multi/session-manager.ts` |
 
 The recurring substitution is: **do the real version of the legitimate need.**
 The legitimate need behind most of these is "do not get rate-limited, do not

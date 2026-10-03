@@ -4,9 +4,9 @@
  * Every adapter implements the framework's `SessionStore`, so any of them drops
  * into `SuperOptions.sessionStore` with no other change:
  *
- *   import { MongoSessionStore } from 'super-baileys/adapters/session-mongo.js';
+ *   import { MongoSessionStore } from 'nyx-baileys/adapters/session-mongo.js';
  *
- *   createSuperBaileys({ sessionStore: new MongoSessionStore({ sessionId, db }) });
+ *   createNyxBaileys({ sessionStore: new MongoSessionStore({ sessionId, db }) });
  *
  * None of these import a database driver. Each declares the narrow client
  * surface it calls and you supply the real client, so the choice of driver (and

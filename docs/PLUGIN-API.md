@@ -1,10 +1,10 @@
 # PLUGIN API
 
-How to write, attach, order and dispose a Super Baileys plugin, and what the
+How to write, attach, order and dispose a Nyx-Baileys plugin, and what the
 eleven built-in plugins add to the socket.
 
 Source of truth: `src/utils/types.ts:16-38` (the interface),
-`src/superBaileys.ts:164-190` (how it is invoked),
+`src/nyxBaileys.ts:164-190` (how it is invoked),
 `src/core/intercept.ts` (the primitive everything is built on).
 
 ---
@@ -32,7 +32,7 @@ export interface PluginContext {
 lifecycle callback you have to remember to fire.
 
 `apply` may be sync or async — `decorate()` awaits it
-(`src/superBaileys.ts:179`). Returning a promise that rejects does **not** take
+(`src/nyxBaileys.ts:179`). Returning a promise that rejects does **not** take
 the socket down: `decorate()` wraps every call in `try`/`catch`, logs
 `plugin failed to apply` with the plugin name and the error message, and moves on
 (`:182-188`). A plugin that throws costs you that plugin and nothing else, which
@@ -48,7 +48,7 @@ your own lines, as every built-in plugin does.
 - **Do not touch `node_modules`.** Nothing in this framework does, and the whole
   design rests on it.
 - **Do not add a `connection.update` listener.** Use
-  `SuperBaileys.onConnection()` (`src/superBaileys.ts:229-232`) so there is one
+  `NyxBaileys.onConnection()` (`src/nyxBaileys.ts:229-232`) so there is one
   owner of that event. `#wireConnection()` (`:193-220`) is documented as
   precisely that, and the demo breaks the rule at `src/index.ts:301-306`.
 - **Do not use `this`.** `apply` is a closure over your own state. The socket
@@ -62,14 +62,14 @@ your own lines, as every built-in plugin does.
 ### Add to the default chain
 
 ```ts
-import { SuperBaileys, approvalQueue } from 'super-baileys';
+import { NyxBaileys, approvalQueue } from 'nyx-baileys';
 
-const client = new SuperBaileys({ sessionDir: './session' });
+const client = new NyxBaileys({ sessionDir: './session' });
 client.registerPlugin(approvalQueue({ approvers: ['15551234567@s.whatsapp.net'] }));
 await client.connect();
 ```
 
-`registerPlugin()` (`src/superBaileys.ts:76-80`) appends to the default chain and
+`registerPlugin()` (`src/nyxBaileys.ts:76-80`) appends to the default chain and
 re-sorts by `order`:
 
 ```ts
@@ -78,7 +78,7 @@ Object.defineProperty(this, 'plugins', { value: () => all, configurable: true })
 ```
 
 Note what that does: it redefines the instance's own `plugins` method rather than
-mutating a shared array, so each `SuperBaileys` instance gets its own chain. Two
+mutating a shared array, so each `NyxBaileys` instance gets its own chain. Two
 instances in one process cannot contaminate each other's plugin lists.
 
 If you register the *same plugin name* twice, both are kept and both apply. Give
@@ -87,10 +87,10 @@ distinct names, or drop the built-in you are replacing with
 
 ### Replace the chain entirely
 
-`plugins()` is `protected` (`src/superBaileys.ts:56`). Override it:
+`plugins()` is `protected` (`src/nyxBaileys.ts:56`). Override it:
 
 ```ts
-class Bare extends SuperBaileys {
+class Bare extends NyxBaileys {
   protected plugins() {
     return [stealth(), lidRouter(), myPlugin()];
   }
@@ -128,7 +128,7 @@ Pick a number in the gap you need. Concretely:
 | Read state an earlier plugin attaches | above that plugin's order | e.g. `warmup` at 100 reads `__antispam` from 80 |
 | Have the final say on a send | 100+ | outermost, sees everything |
 
-The comments in `src/superBaileys.ts:64-65` are stale — they claim 70 and 75 for
+The comments in `src/nyxBaileys.ts:64-65` are stale — they claim 70 and 75 for
 `sessionRepair` and `autoReconnect`, which actually declare 65 and 70. Read the
 `order` field, not the comment. The chain is correctly sorted regardless.
 
@@ -191,8 +191,8 @@ scattered through your call sites.
 
 ## 4. Disposal
 
-`ctx.onDispose(fn)` (`src/superBaileys.ts:174`) pushes onto the instance's
-`Disposables` list. Two things dispose it: `SuperBaileys.dispose()` (`:274-284`)
+`ctx.onDispose(fn)` (`src/nyxBaileys.ts:174`) pushes onto the instance's
+`Disposables` list. Two things dispose it: `NyxBaileys.dispose()` (`:274-284`)
 and `#rebuild()` (`:141`), which is what makes reconnect non-accumulating.
 
 `Disposables.dispose()` (`src/core/intercept.ts:159-169`) pops from the **end**,
@@ -260,8 +260,8 @@ A complete plugin that holds outbound messages for a human to approve. It patche
 command.
 
 ```ts
-import { patch } from 'super-baileys';
-import type { Plugin, PluginContext } from 'super-baileys';
+import { patch } from 'nyx-baileys';
+import type { Plugin, PluginContext } from 'nyx-baileys';
 
 interface Pending {
   id: string;
@@ -337,7 +337,7 @@ export function approvalQueue(options: ApprovalQueueOptions = {}): Plugin {
           pending.set(id, { id, jid: rawJid, content, resolve, reject, at: Date.now(), timer });
 
           // Re-emit as a normalised event rather than a second emitter name.
-          ctx.sock.ev.emit('super.approval' as never, {
+          ctx.sock.ev.emit('nyx.approval' as never, {
             id, jid: rawJid, content, at: Date.now(),
           } as never);
         });
@@ -399,9 +399,9 @@ export function approvalQueue(options: ApprovalQueueOptions = {}): Plugin {
 Using it:
 
 ```ts
-import { createSuperBaileys, approvalQueue } from './approval-queue.js';
+import { createNyxBaileys, approvalQueue } from './approval-queue.js';
 
-const client = createSuperBaileys({ sessionDir: './session' });
+const client = createNyxBaileys({ sessionDir: './session' });
 client.registerPlugin(approvalQueue({ approvers: ['ops@corp.example'] }));
 
 const sock = await client.connect();
@@ -411,7 +411,7 @@ const queue = (sock as unknown as {
 }).approvals;
 
 // Operator side: every parked message is visible, nothing is sent silently.
-sock.ev.on('super.approval', (item) => {
+sock.ev.on('nyx.approval', (item) => {
   console.log('needs approval:', item);
 });
 ```
@@ -437,8 +437,8 @@ Most conversational behaviour does not need `patch` at all. The flow engine at
 order 90 is a state machine you can drive by registering flows:
 
 ```ts
-import { flowEngine } from 'super-baileys';
-import type { Flow } from 'super-baileys';
+import { flowEngine } from 'nyx-baileys';
+import type { Flow } from 'nyx-baileys';
 
 const survey: Flow = {
   id: 'survey',
@@ -542,7 +542,7 @@ The peak is the full asset plus one chunk, not one chunk. The docstring says so
 | `waitForAlbum(key, timeoutMs?)` | `(k: string, t?: number) => Promise<Album \| undefined>` | Resolves when the album completes, or on timeout |
 
 `Album` is `{ key, jid, expected, items, completedAt? }`; `AlbumItem` is
-`{ index, caption, message, kind? }`. Emits `super.album` on every change.
+`{ index, caption, message, kind? }`. Emits `nyx.album` on every change.
 
 Two rc14 facts that make this work, both documented in `ARCHITECTURE.md` §5.4:
 the parent carries counts only, and sibling linkage is
@@ -572,7 +572,7 @@ consume-once accessor, not a cache.
 |---|---|---|
 | `groupAlerts` | `GroupAlert[]` | Bounded at 100. `{ groupId, kind, participants, at, detail }` |
 | `groupAdmins` | `Map<string, Set<string>>` | Observed admin set per group |
-| `super.groupAlert` | event | Emitted on every alert |
+| `nyx.groupAlert` | event | Emitted on every alert |
 
 `kind` is `'mass-add'` (8+ joins inside 10 minutes by default) or
 `'privilege-climb'`. **Read-only by design** — alerts are reported, never acted
@@ -604,7 +604,7 @@ by parsing `messageParamsJson`. A malformed `paramsJson` is left untouched.
 1 s to a 60 s ceiling, reset after 5 healthy minutes. The reason switch is
 explicit: `loggedOut` and `multideviceMismatch` stop the loop rather than looping
 forever, because both need a human with a phone. Also consumes
-`sock.__requestReconnect`, which `SuperBaileys` defines at connect time — a host
+`sock.__requestReconnect`, which `NyxBaileys` defines at connect time — a host
 that does not define it gets a logged warning and a socket left down.
 
 ### `anti-spam` — order 80
@@ -629,7 +629,7 @@ Scope is outbound pacing only. It does not fabricate presence — see
 | Helper | Type | What it is |
 |---|---|---|
 | `flows` | `{ add; remove; list; active(jid); reset(jid?) }` | Runtime registry |
-| `super.album` etc. | — | (see `album`, order 40) |
+| `nyx.album` etc. | — | (see `album`, order 40) |
 
 `active(jid)` returns the current step name or `undefined`. See §6 for authoring.
 

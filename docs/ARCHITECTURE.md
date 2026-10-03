@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-Super Baileys 0.1.0 · upstream `@whiskeysockets/baileys@7.0.0-rc14` · Node ≥ 20
+Nyx-Baileys 0.1.0 · upstream `@whiskeysockets/baileys@7.0.0-rc14` · Node ≥ 20
 
 Snapshot: 2026-10-03, 51 TypeScript files under `src/`, 21 plugin modules of
 which 11 are in the default chain. Measured on the tree as it stood when this was
@@ -99,7 +99,7 @@ patch A, then patch B on the same method  →  B[A[ORIGINAL(1)]]     both ran
 ### The pristine stash, and the bug still living in it
 
 Separately from `original`, `patch` stashes a copy of the truly-pristine function
-on a well-known symbol, `Symbol.for('super-baileys.pristine')`
+on a well-known symbol, `Symbol.for('nyx-baileys.pristine')`
 (`src/core/intercept.ts:19`). `undo()` restores from the stash rather than
 leaving a wrapper behind, so a full teardown returns the object to exactly what
 `makeWASocket()` produced.
@@ -124,7 +124,7 @@ patch b, then a  →  stash keys ["b"]   →  undo() leaves  a: undefined, b: fu
 
 The wrappers work. Only the teardown is wrong, and it fails quietly. This is
 reproducible in the real chain — `session-repair` and `anti-spam` each patch
-`sendMessage` and `relayMessage`, so on `SuperBaileys.dispose()` the second of
+`sendMessage` and `relayMessage`, so on `NyxBaileys.dispose()` the second of
 those two methods is set to `undefined` rather than restored. It is latent rather
 than user-visible today only because a disposed socket is discarded anyway, but
 `patchAll`'s aggregate undo is affected on any object:
@@ -165,8 +165,8 @@ chooses the loud option and the choice is visible in its log line.
 the host share one teardown path. `dispose()` pops from the end
 (`:160-168`) — reverse order, so later patches unwind before the ones they
 wrapped — and each disposer is individually `try`/`catch`ed, because one throwing
-disposer must not strand the rest. `SuperBaileys.patchCount`
-(`src/superBaileys.ts:286-288`) exposes the outstanding disposer count, which the
+disposer must not strand the rest. `NyxBaileys.patchCount`
+(`src/nyxBaileys.ts:286-288`) exposes the outstanding disposer count, which the
 demo prints (`src/index.ts:282`) as the cheapest possible assertion that
 decoration actually happened.
 
@@ -184,7 +184,7 @@ interface Plugin {
 }
 ```
 
-`SuperBaileys.plugins()` (`src/superBaileys.ts:56-70`) returns the default chain;
+`NyxBaileys.plugins()` (`src/nyxBaileys.ts:56-70`) returns the default chain;
 `registerPlugin()` (`:76-80`) appends and re-sorts by `order`, so adding a plugin
 never requires forking the class.
 
@@ -204,7 +204,7 @@ The live default chain, verified by instantiating and reading `plugins()`:
 | 90 | `flow` | `plugins/flow.ts` | `flows`, conversational state machine |
 | 100 | `warmup` | `plugins/warmup.ts` | pacing ramp, persisted start time |
 
-`decorate()` (`src/superBaileys.ts:164-190`) applies each in order and **isolates
+`decorate()` (`src/nyxBaileys.ts:164-190`) applies each in order and **isolates
 failures per plugin**: a throw is logged with the plugin name and the loop
 continues (`:182-188`). One broken plugin costs you that plugin, not the socket.
 
@@ -223,12 +223,12 @@ for `__antispam` through an `as unknown as` cast rather than importing the
 plugin, and calls `?.setPressure?.()`, so a missing `anti-spam` is a no-op rather
 than a crash.
 
-**3. Stable diagnostics.** `client.applied` (`src/superBaileys.ts:41`) is
+**3. Stable diagnostics.** `client.applied` (`src/nyxBaileys.ts:41`) is
 populated in application order (`:180`), so the demo's plugin list
 (`src/index.ts:282`) reads in a fixed, meaningful sequence.
 
 **A known wart in the source.** The trailing comments in `plugins()`
-(`src/superBaileys.ts:64-65`) say `70` for `sessionRepair` and `75` for
+(`src/nyxBaileys.ts:64-65`) say `70` for `sessionRepair` and `75` for
 `autoReconnect`. The values actually declared are `65`
 (`plugins/session-repair.ts:45`) and `70` (`plugins/reconnect.ts:39`). The
 comments are stale. The chain is still correctly sorted — 65 < 70 — so behaviour
@@ -247,7 +247,7 @@ when it needs the final say, or when it reads state an earlier plugin attaches.
 
 ### connect
 
-`connect()` (`src/superBaileys.ts:86-92`) is concurrency-safe: simultaneous
+`connect()` (`src/nyxBaileys.ts:86-92`) is concurrency-safe: simultaneous
 callers share one in-flight attempt via `#connecting`, which is cleared in a
 `finally` (`:88-90`). `#connect()` (`:94-128`) then runs, in order:
 
@@ -283,7 +283,7 @@ must re-pair each time. `VERIFICATION.md` D5 recorded this as HIGH; it is fixed.
 
 ### rebuild
 
-`#rebuild()` (`src/superBaileys.ts:136-161`) is the reconnect path, and the
+`#rebuild()` (`src/nyxBaileys.ts:136-161`) is the reconnect path, and the
 comment at `:132-135` states the ordering requirement: **unwind every patch
 first**, so the new socket is decorated from a clean object rather than stacking
 wrappers on wrappers across reconnect cycles.
@@ -304,7 +304,7 @@ not be trusted while D3 stood, and the stash bug in §2 is the remaining reason
 
 ### dispose
 
-`dispose()` (`src/superBaileys.ts:274-284`) sets `#closed`, ends the socket inside
+`dispose()` (`src/nyxBaileys.ts:274-284`) sets `#closed`, ends the socket inside
 a `try`/`catch` (the socket may already be down), disposes everything, clears
 `applied`. After it, `connect()` throws by way of the `invariant` at `:95`.
 
@@ -312,7 +312,7 @@ a `try`/`catch` (the socket may already be down), disposes everything, clears
 
 `#wireConnection()` (`:193-220`) is documented as the single owner of
 `connection.update`, and `#lastConnection` (`:196`) records `{ at, state }` for
-`SuperBaileys.connectionState`. Plugins that need connection events register via
+`NyxBaileys.connectionState`. Plugins that need connection events register via
 `onConnection()` (`:229-232`) rather than adding their own listener, and fan-out
 (`#closeEvent`, `:234-242`) isolates per-listener throws.
 
@@ -500,7 +500,7 @@ builder in `nodes.ts` round-trips correctly — `createAlbumContainer` and
 ```
 src/
   index.ts                 public surface (51 exports) + demo main()
-  superBaileys.ts          the wrapper class: lifecycle, plugin chain, rebuild
+  nyxBaileys.ts          the wrapper class: lifecycle, plugin chain, rebuild
   core/
     socket.ts              makeWASocket + tuning + fingerprint + creds persistence
     intercept.ts           patch/patchAll/listen/Disposables — the primitive
@@ -560,7 +560,7 @@ you plan around them:
 2. **`package.json` `exports` does not map them.** The map is `.`, `./core/*`,
    `./plugins/*`, `./utils/*` — no `./adapters/*`, `./multi/*`, `./security/*`
    or `./cli/*`. So even though `src/adapters/index.ts:11-13` documents the
-   intended `import … from 'super-baileys/adapters/session-mongo.js'`, that
+   intended `import … from 'nyx-baileys/adapters/session-mongo.js'`, that
    specifier does not resolve against the published `exports` map. Until the map
    is extended, these are reachable only by deep relative import from `dist/`.
 

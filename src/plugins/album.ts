@@ -106,7 +106,7 @@ export function albumHandler(): Plugin {
               album.items.push({ index: album.items.length, caption: '', message: item });
             }
             if (album.items.length >= album.expected) album.completedAt = Date.now();
-            ctx.sock.ev.emit('super.album' as never, album as never);
+            ctx.sock.ev.emit('nyx.album' as never, album as never);
             continue;
           }
 
@@ -124,7 +124,7 @@ export function albumHandler(): Plugin {
             album.completedAt = Date.now();
           }
           log.debug('album item', { parent, total: album.items.length });
-          ctx.sock.ev.emit('super.album' as never, album as never);
+          ctx.sock.ev.emit('nyx.album' as never, album as never);
         }
       });
 
@@ -166,11 +166,11 @@ export function albumHandler(): Plugin {
           const handler = (album: Album): void => {
             if (album.key === key && album.completedAt) {
               clearTimeout(timer);
-              ctx.sock.ev.off('super.album' as never, handler as never);
+              ctx.sock.ev.off('nyx.album' as never, handler as never);
               resolve(album);
             }
           };
-          ctx.sock.ev.on('super.album' as never, handler as never);
+          ctx.sock.ev.on('nyx.album' as never, handler as never);
         });
 
       Object.defineProperty(ctx.sock, 'albums', { value: albums, enumerable: false, configurable: true });

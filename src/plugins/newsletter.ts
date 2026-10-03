@@ -190,7 +190,7 @@ export function newsletters(options: NewsletterOptions = {}): Plugin {
         // than keeping a zero-count ghost in the index.
         if (event.reaction?.removed) {
           if (existing) reactions.delete(key);
-          ctx.sock.ev.emit('super.newsletterReaction' as never, {
+          ctx.sock.ev.emit('nyx.newsletterReaction' as never, {
             newsletterJid: event.id,
             serverId: event.server_id,
             code,
@@ -209,7 +209,7 @@ export function newsletters(options: NewsletterOptions = {}): Plugin {
         };
         reactions.set(key, state);
         evict(reactions, maxReactions);
-        ctx.sock.ev.emit('super.newsletterReaction' as never, state as never);
+        ctx.sock.ev.emit('nyx.newsletterReaction' as never, state as never);
       });
 
       ctx.sock.ev.on('newsletter.view', (event: BaileysEventMap['newsletter.view']) => {
@@ -225,7 +225,7 @@ export function newsletters(options: NewsletterOptions = {}): Plugin {
           updatedAt: Date.now(),
         });
         evict(views, maxViews);
-        ctx.sock.ev.emit('super.newsletterView' as never, views.get(key) as never);
+        ctx.sock.ev.emit('nyx.newsletterView' as never, views.get(key) as never);
         if (state) log.debug('newsletter view', { serverId: event.server_id, views: event.count });
       });
 
@@ -242,7 +242,7 @@ export function newsletters(options: NewsletterOptions = {}): Plugin {
             at: Date.now(),
           };
           participantEvents.push(record);
-          ctx.sock.ev.emit('super.newsletterParticipants' as never, record as never);
+          ctx.sock.ev.emit('nyx.newsletterParticipants' as never, record as never);
         },
       );
 
@@ -256,7 +256,7 @@ export function newsletters(options: NewsletterOptions = {}): Plugin {
           at: Date.now(),
         };
         settingsEvents.push(record);
-        ctx.sock.ev.emit('super.newsletterSettings' as never, record as never);
+        ctx.sock.ev.emit('nyx.newsletterSettings' as never, record as never);
       });
 
       /* ── surface ────────────────────────────────────────────────── */

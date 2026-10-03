@@ -223,7 +223,7 @@ export function antiDelete(options: AntiDeleteOptions = {}): Plugin {
               timestamp: Number(cached.messageTimestamp ?? 0) || undefined,
             })
             .then(() => {
-              ctx.sock.ev.emit('super.revoked' as never, { key, message: cached } as never);
+              ctx.sock.ev.emit('nyx.revoked' as never, { key, message: cached } as never);
               return forward(key, cached);
             })
             .catch((err: unknown) => {

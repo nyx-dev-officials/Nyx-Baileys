@@ -1,7 +1,7 @@
 /**
  * Feature plugin barrel.
  *
- * These plugins are *opt-in*: none of them is in `SuperBaileys`'s default chain,
+ * These plugins are *opt-in*: none of them is in `NyxBaileys`'s default chain,
  * because every one of them encodes a product decision that is not the library's
  * to make — whether to send read receipts, what presence means, which webhook
  * events leave the process. Wire them explicitly:

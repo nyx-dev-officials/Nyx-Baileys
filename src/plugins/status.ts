@@ -158,7 +158,7 @@ export function statusFeed(options: StatusOptions = {}): Plugin {
         evict();
 
         log.debug('status seen', { jid, kind: entry.kind ?? 'text' });
-        ctx.sock.ev.emit('super.status' as never, entry as never);
+        ctx.sock.ev.emit('nyx.status' as never, entry as never);
       };
 
       ctx.sock.ev.on('messages.upsert', (event: BaileysEventMap['messages.upsert']) => {
@@ -176,7 +176,7 @@ export function statusFeed(options: StatusOptions = {}): Plugin {
           if (!entry) continue;
           const removed: StatusEntry = { ...entry, removed: true };
           entries.set(removed.id, removed);
-          ctx.sock.ev.emit('super.statusRemoved' as never, removed as never);
+          ctx.sock.ev.emit('nyx.statusRemoved' as never, removed as never);
         }
       });
 

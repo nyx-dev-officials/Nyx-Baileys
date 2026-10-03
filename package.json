@@ -1,5 +1,5 @@
 {
-  "name": "super-baileys",
+  "name": "nyx-baileys",
   "version": "0.1.0",
   "description": "Hyper-modular WhatsApp client framework — upstream Baileys engine, decorated at runtime. No node_modules edits.",
   "type": "module",
@@ -22,7 +22,7 @@
     "./cli/*": "./dist/cli/*.js"
   },
   "bin": {
-    "super-baileys": "./bin/super-baileys.js"
+    "nyx-baileys": "./bin/nyx-baileys.js"
   },
   "files": ["dist", "README.md", "docs"],
   "engines": {

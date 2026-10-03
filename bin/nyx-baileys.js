@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Super Baileys CLI launcher.
+ * Nyx-Baileys CLI launcher.
  *
  * Thin on purpose: resolve the compiled entry point relative to this file —
  * never relative to `process.cwd()` — so the command works the same whether it
@@ -23,7 +23,7 @@ const entry = join(here, '..', 'dist', 'cli', 'main.js');
 
 if (!existsSync(entry)) {
   process.stderr.write(
-    `error  super-baileys is not built — ${entry} does not exist\n` +
+    `error  nyx-baileys is not built — ${entry} does not exist\n` +
       '       build it first:  npm run build\n',
   );
   process.exit(1);
@@ -44,7 +44,7 @@ try {
   process.exitCode = typeof code === 'number' ? code : 0;
 } catch (err) {
   const message = err instanceof Error ? err.message : String(err);
-  process.stderr.write(`error  super-baileys could not start: ${message}\n`);
+  process.stderr.write(`error  nyx-baileys could not start: ${message}\n`);
   process.stderr.write('       if the build is stale, run:  npm run build\n');
   process.exit(2);
 }

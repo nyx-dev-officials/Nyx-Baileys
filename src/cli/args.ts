@@ -1,5 +1,5 @@
 /**
- * Argument parsing for the Super Baileys CLI.
+ * Argument parsing for the Nyx-Baileys CLI.
  *
  * Dependency-free on purpose. The CLI has to be able to load and print help
  * even when the rest of the package is broken or half-built, so this file
@@ -428,7 +428,7 @@ export function renderRootHelp(config: ParserConfig): string {
   const commands = config.commands.map((c) => `  ${c.name.padEnd(width)}  ${c.summary}`);
 
   return [
-    'super-baileys — command line for the Super Baileys WhatsApp framework.',
+    'nyx-baileys — command line for the Nyx-Baileys WhatsApp framework.',
     '',
     section('USAGE', [
       `  ${config.program} <command> [flags]`,

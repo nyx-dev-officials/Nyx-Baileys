@@ -51,7 +51,7 @@ export function groupGuard(options: GroupPolicyOptions = {}): Plugin {
         alerts.push(a);
         if (alerts.length > 100) alerts.shift();
         log.warn('group policy alert', { kind: a.kind, group: a.groupId, n: a.participants.length });
-        ctx.sock.ev.emit('super.groupAlert' as never, a as never);
+        ctx.sock.ev.emit('nyx.groupAlert' as never, a as never);
       };
 
       ctx.sock.ev.on(

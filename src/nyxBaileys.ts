@@ -19,7 +19,7 @@ import { autoReconnect } from './plugins/reconnect.js';
 import { sessionRepair } from './plugins/session-repair.js';
 
 /**
- * Super Baileys.
+ * Nyx-Baileys.
  *
  * One upstream `makeWASocket()`, then a chain of runtime decorators. The socket
  * that leaves this class is a real Baileys socket with a few of its methods
@@ -30,7 +30,7 @@ import { sessionRepair } from './plugins/session-repair.js';
  *   decorate()       → plugins applied in `order`
  *   the returned `this.sock` is what callers use
  */
-export class SuperBaileys {
+export class NyxBaileys {
   readonly options: SuperOptions;
   readonly log: Logger;
 
@@ -92,7 +92,7 @@ export class SuperBaileys {
   }
 
   async #connect(): Promise<CoreSocket> {
-    invariant(!this.#closed, 'this SuperBaileys instance was disposed');
+    invariant(!this.#closed, 'this NyxBaileys instance was disposed');
 
     const store = this.options.sessionStore ?? new FileSessionStore({
       dir: this.options.sessionDir ?? './session',
@@ -289,8 +289,17 @@ export class SuperBaileys {
 }
 
 /** Factory — one isolated instance per session number. */
-export function createSuperBaileys(options: SuperOptions = {}): SuperBaileys {
-  return new SuperBaileys(options);
+export function createNyxBaileys(options: SuperOptions = {}): NyxBaileys {
+  return new NyxBaileys(options);
 }
 
-export default createSuperBaileys;
+/* ── back-compat aliases ────────────────────────────────────────────────
+ * The project was named "Super Baileys" until v0.1.0. These aliases keep
+ * existing imports working through one more release so the rename is not a
+ * breaking change for anyone who already wrote `new SuperBaileys()`. They will
+ * be removed in the next minor.
+ */
+
+export { NyxBaileys as SuperBaileys, createNyxBaileys as createSuperBaileys };
+
+export default createNyxBaileys;

@@ -266,7 +266,7 @@ export function polls(options: PollsOptions = {}): Plugin {
         evict();
 
         log.debug('created', { id, options: values.length, selectableCount });
-        ctx.sock.ev.emit('super.poll' as never, states.get(id) as never);
+        ctx.sock.ev.emit('nyx.poll' as never, states.get(id) as never);
         return id;
       };
 
@@ -322,7 +322,7 @@ export function polls(options: PollsOptions = {}): Plugin {
         const messageId = await vote(pollId, []);
         poll.closed = true;
         poll.closedAt = Date.now();
-        ctx.sock.ev.emit('super.poll' as never, poll as never);
+        ctx.sock.ev.emit('nyx.poll' as never, poll as never);
         return messageId;
       };
 
@@ -388,7 +388,7 @@ export function polls(options: PollsOptions = {}): Plugin {
             poll.closed = true;
             poll.closedAt = Date.now();
           }
-          ctx.sock.ev.emit('super.pollUpdate' as never, { poll, voter, hashes, withdrew } as never);
+          ctx.sock.ev.emit('nyx.pollUpdate' as never, { poll, voter, hashes, withdrew } as never);
         } catch (err) {
           poll.undecryptableVotes += 1;
           log.debug('vote decrypt failed', { poll: creationId, err: (err as Error).message });
@@ -422,7 +422,7 @@ export function polls(options: PollsOptions = {}): Plugin {
         const secret = secretOf(msg);
         if (secret) secrets.set(id, secret);
         evict();
-        ctx.sock.ev.emit('super.poll' as never, states.get(id) as never);
+        ctx.sock.ev.emit('nyx.poll' as never, states.get(id) as never);
       };
 
       /* ── results ────────────────────────────────────────────────── */

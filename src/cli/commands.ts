@@ -1,5 +1,5 @@
 /**
- * Commands for the Super Baileys CLI.
+ * Commands for the Nyx-Baileys CLI.
  *
  * One rule across all of them: a command either reports what actually happened
  * or it fails. Nothing here prints a success line for work it did not do, and
@@ -24,7 +24,7 @@ import { createInterface } from 'node:readline/promises';
 
 import { createFormFlow, infoRow, radioRow } from '../core/nodes.js';
 import { FileSessionStore } from '../core/session-store.js';
-import { createSuperBaileys } from '../superBaileys.js';
+import { createNyxBaileys } from '../nyxBaileys.js';
 import {
   UsageError,
   flagBool,
@@ -36,7 +36,7 @@ import {
   type ParsedArgs,
 } from './args.js';
 import { formatAgo, formatBytes, formatDuration, Reporter } from './output.js';
-import type { SuperBaileys } from '../superBaileys.js';
+import type { NyxBaileys } from '../nyxBaileys.js';
 import type { LogLevel } from '../utils/logger.js';
 import type { HealthReport } from '../utils/types.js';
 
@@ -161,7 +161,7 @@ interface SocketExtensions {
   readonly __identity?: SocketIdentity;
 }
 
-function extensions(client: SuperBaileys): SocketExtensions {
+function extensions(client: NyxBaileys): SocketExtensions {
   return client.sock as unknown as SocketExtensions;
 }
 
@@ -306,7 +306,7 @@ async function requirePaired(env: CliEnv): Promise<SessionRecord> {
   throw new CliError(
     EXIT.notPaired,
     `no paired session in ${record.path}`,
-    `run \`super-baileys pair\` to scan a QR code, or \`--dir\` to point at the right session`,
+    `run \`nyx-baileys pair\` to scan a QR code, or \`--dir\` to point at the right session`,
   );
 }
 
@@ -324,8 +324,8 @@ interface OpenOptions {
  * Returns the client even when the socket never opens, so the caller can report
  * what state it did reach instead of a bare "timed out".
  */
-async function openSocket(ctx: CommandContext, options: OpenOptions): Promise<{ client: SuperBaileys; open: boolean }> {
-  const client = createSuperBaileys({
+async function openSocket(ctx: CommandContext, options: OpenOptions): Promise<{ client: NyxBaileys; open: boolean }> {
+  const client = createNyxBaileys({
     sessionDir: ctx.env.sessionDir,
     logLevel: ctx.env.logLevel,
     printQRInTerminal: options.printQR ?? true,
@@ -352,7 +352,7 @@ const diagnosis = diagnoseConnectError(err);
   return { client, open };
 }
 
-function waitForOpen(client: SuperBaileys, timeoutMs: number): Promise<boolean> {
+function waitForOpen(client: NyxBaileys, timeoutMs: number): Promise<boolean> {
   if (client.connectionState.state === 'open') return Promise.resolve(true);
 
   return new Promise<boolean>((resolve) => {
@@ -413,7 +413,7 @@ interface ConnectionUpdate {
 }
 
 /** Send through the framework's own resolution path so `@lid` works. */
-async function sendText(client: SuperBaileys, target: string, text: string): Promise<{ target: string; id: string | undefined; timestamp: number | undefined }> {
+async function sendText(client: NyxBaileys, target: string, text: string): Promise<{ target: string; id: string | undefined; timestamp: number | undefined }> {
   const ext = extensions(client);
   const resolved = (await ext.resolveJid?.(target)) ?? target;
   const sent = await client.sock.sendMessage(resolved, { text });
@@ -434,7 +434,7 @@ const pairSpec: CommandSpec = {
     { name: 'timeout', kind: 'number', default: 180, placeholder: '<seconds>', describe: 'How long to wait for the QR to be scanned' },
     { name: 'connect-timeout', kind: 'number', default: 60, placeholder: '<seconds>', describe: 'How long to wait for the socket to open' },
   ],
-  examples: ['super-baileys pair', 'super-baileys pair --dir ./session --timeout 300'],
+  examples: ['nyx-baileys pair', 'nyx-baileys pair --dir ./session --timeout 300'],
   notes: [
     'WhatsApp → Linked devices → Link a device, then either scan the QR or enter the phone code.',
     'rc14 removed terminal QR rendering: the pairing ref arrives on connection.update and this command prints it. Use the 8-character phone code, which needs no scanner.',
@@ -451,7 +451,7 @@ async function cmdPair(ctx: CommandContext): Promise<ExitCode> {
   if (existing.registered) {
     io.status(true, `already paired as ${existing.jid ?? 'unknown number'} (${existing.path})`);
     io.line();
-    io.line('To pair a different number: super-baileys sessions remove');
+    io.line('To pair a different number: nyx-baileys sessions remove');
     io.emit('pair', { paired: true, alreadyPaired: true, number: existing.jid, dir: existing.path });
     return EXIT.ok;
   }
@@ -460,7 +460,7 @@ async function cmdPair(ctx: CommandContext): Promise<ExitCode> {
   io.line('Opening the socket…');
   io.line();
 
-  const client = createSuperBaileys({
+  const client = createNyxBaileys({
     sessionDir: ctx.env.sessionDir,
     logLevel: ctx.env.logLevel,
     printQRInTerminal: true,
@@ -509,7 +509,7 @@ async function cmdPair(ctx: CommandContext): Promise<ExitCode> {
         result.reason === 'timeout'
           ? `no QR scan within ${formatDuration(pairTimeout)}.${code}`
           : `the socket closed before pairing completed.${code}`,
-        'run `super-baileys pair` again and scan within the window',
+        'run `nyx-baileys pair` again and scan within the window',
       );
     }
   }
@@ -519,7 +519,7 @@ async function cmdPair(ctx: CommandContext): Promise<ExitCode> {
     throw new CliError(
       EXIT.failure,
       `paired, but the socket did not open within ${formatDuration(connectTimeout)}`,
-      'the pairing is saved — run `super-baileys status` to check it',
+      'the pairing is saved — run `nyx-baileys status` to check it',
     );
   }
 
@@ -565,7 +565,7 @@ function formatPairingCode(code: string): string {
 }
 
 async function waitForPairing(
-  client: SuperBaileys,
+  client: NyxBaileys,
   timeoutMs: number,
   pairing: Pairing,
   io: Reporter,
@@ -603,7 +603,7 @@ const statusSpec: CommandSpec = {
   flags: [
     { name: 'connect-timeout', kind: 'number', default: 30, placeholder: '<seconds>', describe: 'How long to wait for the socket to open' },
   ],
-  examples: ['super-baileys status', 'super-baileys status --json'],
+  examples: ['nyx-baileys status', 'nyx-baileys status --json'],
   notes: [
     'Opening a socket to read live state means this command connects to WhatsApp. Session data is reported even when the socket cannot be opened.',
     'Exit code 3 means the session exists but is not paired.',
@@ -709,12 +709,12 @@ const sendSpec: CommandSpec = {
     { name: 'timeout', kind: 'number', default: 60, placeholder: '<seconds>', describe: 'How long to wait for the socket to open' },
   ],
   examples: [
-    'super-baileys send 15551234567@s.whatsapp.net "build green"',
-    'super-baileys send 120363000000000000@g.us --text "deploy finished"',
+    'nyx-baileys send 15551234567@s.whatsapp.net "build green"',
+    'nyx-baileys send 120363000000000000@g.us --text "deploy finished"',
   ],
   notes: [
     'Sends are paced by the anti-spam plugin, so this command waits before it returns.',
-    'Use `--` when the body starts with a dash: super-baileys send <jid> -- --force',
+    'Use `--` when the body starts with a dash: nyx-baileys send <jid> -- --force',
   ],
 };
 
@@ -724,7 +724,7 @@ async function cmdSend(ctx: CommandContext): Promise<ExitCode> {
   const jid = (positionalJid ?? '').trim();
   const text = flagString(args, 'text', positionalText ?? '');
 
-  if (!jid) throw new UsageError('missing recipient', 'usage: super-baileys send <jid> <text>');
+  if (!jid) throw new UsageError('missing recipient', 'usage: nyx-baileys send <jid> <text>');
   if (!text.trim()) throw new UsageError('refusing to send an empty message', 'pass the body as <text> or `--text "…"`');
 
   await requirePaired(ctx.env);
@@ -755,7 +755,7 @@ const formSpec: CommandSpec = {
     { name: 'info', kind: 'boolean', describe: 'Include a read-only info section in the form' },
     { name: 'timeout', kind: 'number', default: 60, placeholder: '<seconds>', describe: 'How long to wait for the socket to open' },
   ],
-  examples: ['super-baileys form 15551234567@s.whatsapp.net', 'super-baileys form 15551234567@s.whatsapp.net --info --json'],
+  examples: ['nyx-baileys form 15551234567@s.whatsapp.net', 'nyx-baileys form 15551234567@s.whatsapp.net --info --json'],
   notes: [
     'The form is a nativeFlowMessage: WhatsApp renders the radio rows and the client binds the selection.',
     'Send `--info` to include non-selectable info rows alongside the radio rows.',
@@ -765,7 +765,7 @@ const formSpec: CommandSpec = {
 /** The demo form. Built here rather than imported from `src/index.ts` so the CLI owns its own demo. */
 function demoForm(includeInfo: boolean): ReturnType<typeof createFormFlow> {
   return createFormFlow({
-    title: 'Super Baileys',
+    title: 'Nyx-Baileys',
     body: 'nativeFlowMessage — the client renders this UI, it is not a text template.',
     ctaLabel: 'Submit',
     sections: [
@@ -849,7 +849,7 @@ function inspectFlow(flow: ReturnType<typeof createFormFlow>): FlowShape {
 async function cmdForm(ctx: CommandContext): Promise<ExitCode> {
   const { io } = ctx;
   const jid = (ctx.args.positionals[0] ?? '').trim();
-  if (!jid) throw new UsageError('missing recipient', 'usage: super-baileys form <jid>');
+  if (!jid) throw new UsageError('missing recipient', 'usage: nyx-baileys form <jid>');
 
   await requirePaired(ctx.env);
 
@@ -903,7 +903,7 @@ const logsSpec: CommandSpec = {
     { name: 'allow-unpaired', kind: 'boolean', describe: 'Connect even without credentials, to watch connection attempts' },
     { name: 'connect-timeout', kind: 'number', default: 30, placeholder: '<seconds>', describe: 'How long to wait for the socket to open' },
   ],
-  examples: ['super-baileys logs', 'super-baileys logs --level debug --duration 120', 'super-baileys logs --follow --allow-unpaired'],
+  examples: ['nyx-baileys logs', 'nyx-baileys logs --level debug --duration 120', 'nyx-baileys logs --follow --allow-unpaired'],
   notes: [
     'Log level comes from --level or LOG_LEVEL. The framework logger writes to stdout in human mode.',
     '--json clamps the log stream to error on stderr and prints one summary object on stdout.',
@@ -924,7 +924,7 @@ async function cmdLogs(ctx: CommandContext): Promise<ExitCode> {
   const level: LogLevel = env.json ? (env.logLevelExplicit ? env.logLevel : 'error') : env.logLevel;
 
   const record = await readSession(env.sessionDir);
-  const client = createSuperBaileys({
+  const client = createNyxBaileys({
     sessionDir: env.sessionDir,
     logLevel: level,
     printQRInTerminal: true,
@@ -1002,13 +1002,13 @@ const sessionsSpec: CommandSpec = {
     { name: 'force', kind: 'boolean', describe: 'Remove even when the directory holds no creds.json' },
   ],
   examples: [
-    'super-baileys sessions list',
-    'super-baileys sessions remove alice --yes',
-    'super-baileys sessions remove alice',
+    'nyx-baileys sessions list',
+    'nyx-baileys sessions remove alice --yes',
+    'nyx-baileys sessions remove alice',
   ],
   notes: [
     'remove deletes credentials. The number must be re-paired afterwards.',
-    'Every removal is appended to .super-baileys/audit.log in the working directory.',
+    'Every removal is appended to .nyx-baileys/audit.log in the working directory.',
   ],
 };
 
@@ -1020,7 +1020,7 @@ async function cmdSessions(ctx: CommandContext): Promise<ExitCode> {
 
   throw new UsageError(
     `unknown action \`${action}\``,
-    'usage: super-baileys sessions <list|remove> [name]',
+    'usage: nyx-baileys sessions <list|remove> [name]',
   );
 }
 
@@ -1046,7 +1046,7 @@ async function sessionsList(ctx: CommandContext): Promise<ExitCode> {
     const reason = filters.length > 0 ? `no session matches ${filters.join(
 )}` : null;
     io.warn(reason ?? (found.exists ? `no sessions found in ${found.root}` : `directory does not exist: ${found.root}`));
-    if (reason === null) io.line('pair a number to create one: super-baileys pair');
+    if (reason === null) io.line('pair a number to create one: nyx-baileys pair');
     io.emit(
       'sessions',
       { root: found.root, rootExists: found.exists, action: 'list', filters, sessions: [] },
@@ -1083,7 +1083,7 @@ async function sessionsRemove(ctx: CommandContext): Promise<ExitCode> {
   if (!name) {
     throw new UsageError(
       '`sessions remove` needs a session name',
-      'list them with `super-baileys sessions list`, or remove the default session with `--dir <path>`',
+      'list them with `nyx-baileys sessions list`, or remove the default session with `--dir <path>`',
     );
   }
 
@@ -1093,7 +1093,7 @@ async function sessionsRemove(ctx: CommandContext): Promise<ExitCode> {
   if (!target) {
     throw new UsageError(
       `no session named \`${name}\` under ${found.root}`,
-      'list them with `super-baileys sessions list`',
+      'list them with `nyx-baileys sessions list`',
     );
   }
 
@@ -1127,7 +1127,7 @@ async function sessionsRemove(ctx: CommandContext): Promise<ExitCode> {
   });
 
   io.status(true, `removed \`${target.name}\` (${formatBytes(target.bytes)})`);
-  io.line(`Pair it again with: super-baileys pair --dir ${target.path}`);
+  io.line(`Pair it again with: nyx-baileys pair --dir ${target.path}`);
   io.emit('sessions', { action: 'remove', removed: sessionSummary(target), cancelled: false });
   return EXIT.ok;
 }
@@ -1149,10 +1149,10 @@ async function confirm(question: string): Promise<boolean> {
 }
 
 async function audit(cwd: string, entry: Record<string, unknown>): Promise<void> {
-  const file = join(cwd, '.super-baileys', 'audit.log');
+  const file = join(cwd, '.nyx-baileys', 'audit.log');
   const line = `${JSON.stringify({ at: new Date().toISOString(), pid: process.pid, ...entry })}\n`;
   try {
-    await mkdir(join(cwd, '.super-baileys'), { recursive: true });
+    await mkdir(join(cwd, '.nyx-baileys'), { recursive: true });
     await appendFile(file, line, 'utf8');
   } catch (err) {
     // Never fail a completed command because the audit write failed — but say so.
@@ -1169,7 +1169,7 @@ const healthSpec: CommandSpec = {
   flags: [
     { name: 'timeout', kind: 'number', default: 60, placeholder: '<seconds>', describe: 'How long to wait for the socket to open' },
   ],
-  examples: ['super-baileys health', 'super-baileys health --json'],
+  examples: ['nyx-baileys health', 'nyx-baileys health --json'],
   notes: [
     'Counters are per-process: they start at zero when the CLI launches and say nothing about history.',
     'level is low below 3 bad signals, elevated below 10, paused at 10 or more.',

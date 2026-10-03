@@ -1,5 +1,5 @@
 /**
- * Super Baileys CLI entry point.
+ * Nyx-Baileys CLI entry point.
  *
  * Responsibilities, in order: resolve the environment, dispatch, and guarantee
  * teardown. The teardown guarantee is the interesting one — a socket that is
@@ -33,7 +33,7 @@ import {
 } from './commands.js';
 import { Reporter, colourEnabled } from './output.js';
 
-export const PROGRAM = 'super-baileys';
+export const PROGRAM = 'nyx-baileys';
 export const VERSION = '0.1.0';
 
 /** One source of truth: the command registry declares its own specs. */

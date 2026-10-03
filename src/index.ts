@@ -1,5 +1,5 @@
 /**
- * Super Baileys — entry point.
+ * Nyx-Baileys — entry point.
  *
  *   node dist/index.js --pair          pair a new number, prints the QR
  *   node dist/index.js                 connect and run the demo
@@ -13,7 +13,7 @@ import { existsSync } from 'node:fs';
 import { DisconnectReason } from '@whiskeysockets/baileys';
 
 import { createCarouselFlow, createFormFlow, createTableFlow, infoRow, radioRow } from './core/nodes.js';
-import { SuperBaileys, createSuperBaileys } from './superBaileys.js';
+import { NyxBaileys, createNyxBaileys } from './nyxBaileys.js';
 import { flowEngine } from './plugins/flow.js';
 import { compose, table } from './utils/compose.js';
 import type { Flow } from './plugins/flow.js';
@@ -21,7 +21,16 @@ import type { SuperOptions } from './utils/types.js';
 
 /* ── public surface ─────────────────────────────────────────────── */
 
-export { SuperBaileys, createSuperBaileys } from './superBaileys.js';
+export { NyxBaileys, createNyxBaileys } from './nyxBaileys.js';
+
+/**
+ * Legacy aliases for the pre-rename name. Deprecated, kept for one release —
+ * see `src/nyxBaileys.ts`.
+ */
+export {
+  NyxBaileys as SuperBaileys,
+  createNyxBaileys as createSuperBaileys,
+} from './nyxBaileys.js';
 
 export {
   buildFlowMessageParams,
@@ -136,7 +145,7 @@ const supportFlow: Flow = {
 /** A native-flow form: radio selection plus free text plus a footer. */
 export function demoForm(): ReturnType<typeof createFormFlow> {
   return createFormFlow({
-    title: 'Super Baileys',
+    title: 'Nyx-Baileys',
     body: 'This is a nativeFlowMessage — data entry rendered by the client, not a template.',
     ctaLabel: 'Submit',
     sections: [
@@ -218,7 +227,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     },
   };
 
-  const client = new SuperBaileys(options);
+  const client = new NyxBaileys(options);
   // The demo conversation tree rides alongside the defaults.
   client.registerPlugin(flowEngine([supportFlow]));
 
@@ -283,7 +292,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
     await sock.sendMessage(target, {
       text: compose({
         sections: [
-          { title: 'Live from Super Baileys', rows: ['Session open', 'Plugins applied: see below'] },
+          { title: 'Live from Nyx-Baileys', rows: ['Session open', 'Plugins applied: see below'] },
         ],
       }),
     });
@@ -336,4 +345,4 @@ if (process.argv[1] && import.meta.url.endsWith(process.argv[1].replace(/\\/g, '
 }
 
 export default main;
-export { createSuperBaileys as createClient, DisconnectReason };
+export { createNyxBaileys as createClient, DisconnectReason };

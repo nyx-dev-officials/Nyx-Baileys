@@ -1,5 +1,5 @@
 /**
- * Output for the Super Baileys CLI.
+ * Output for the Nyx-Baileys CLI.
  *
  * Two contracts, one implementation:
  *

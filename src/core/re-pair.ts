@@ -74,7 +74,7 @@ export const isLoggedOut = (code: number | undefined): boolean => code === Disco
  * Unlink this device and wipe its credentials.
  *
  * Does not recreate the socket — pairing needs a QR scan, which is a user
- * action. The caller creates a fresh `SuperBaileys` afterwards.
+ * action. The caller creates a fresh `NyxBaileys` afterwards.
  */
 export async function rePair(
   sock: CoreSocket,

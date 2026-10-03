@@ -877,7 +877,7 @@ export function accessControl(options: AclPluginOptions = {}): Plugin {
             scope: denial.scope,
             reason: denial.reason,
           });
-          ctx.sock.ev.emit('super.aclDenied' as never, denial as never);
+          ctx.sock.ev.emit('nyx.aclDenied' as never, denial as never);
         },
       });
 

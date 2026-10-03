@@ -176,7 +176,7 @@ export function reactions(options: ReactionOptions = {}): Plugin {
           bucket.reactions.set(jid, observed);
           bucket.updatedAt = Date.now();
 
-          ctx.sock.ev.emit('super.reaction' as never, { ...observed, key: entry.key } as never);
+          ctx.sock.ev.emit('nyx.reaction' as never, { ...observed, key: entry.key } as never);
         }
       });
 

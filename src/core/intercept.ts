@@ -10,13 +10,13 @@
  *
  * The pristine function is stashed on a symbol, so repeated application
  * (reconnects, re-apply) can never nest wrappers indefinitely. Every patch
- * registers a disposer, so `SuperBaileys.dispose()` unwinds the object back to
+ * registers a disposer, so `NyxBaileys.dispose()` unwinds the object back to
  * exactly what `makeWASocket()` returned.
  */
 
 import type { AnyRecord, Wrapper } from '../utils/types.js';
 
-const STASH = Symbol.for('super-baileys.pristine');
+const STASH = Symbol.for('nyx-baileys.pristine');
 
 export interface Patch<T extends object> {
   /** Restore just this patch. */

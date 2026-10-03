@@ -97,7 +97,7 @@ export class MemorySessionStore implements SessionStore {
 
   async init(): Promise<{ state: SessionState; saveCreds: () => Promise<void> }> {
     if (!this.#state || !this.#save) {
-      const result = await useMultiFileAuthState(join(process.cwd(), '.super-baileys-tmp'));
+      const result = await useMultiFileAuthState(join(process.cwd(), '.nyx-baileys-tmp'));
       this.#state = result.state as SessionState;
       this.#save = async () => {
         await result.saveCreds();
