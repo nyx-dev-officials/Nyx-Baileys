@@ -43,11 +43,15 @@ jobs:
       - name: Lint
         run: npm run lint
 
-      - name: Test
-        run: npm test
-
+      # Build BEFORE test, and this is load-bearing rather than stylistic: every
+      # suite imports from `dist/`, and `check`/`lint` are `--noEmit`, so nothing
+      # has produced it yet. On a developer machine `dist/` is already there from
+      # a previous build and the ordering mistake stays invisible until CI.
       - name: Build
         run: npm run build
+
+      - name: Test
+        run: npm test
 
       # The package `exports` map is a contract. A subpath pointing at a file that
       # tsc never emitted ships a broken deep import that nothing else would catch.
