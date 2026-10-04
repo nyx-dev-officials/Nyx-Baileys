@@ -1,0 +1,98 @@
+# Changelog
+
+All notable changes to `nyx-baileys`. Format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
+semantic versioning with a `0.x` line.
+
+## [0.2.0] — 2026-10-04
+
+Base commit `5d041e6`. This release is **the pairing repair**. Eight defects,
+five of them in `src/cli/`, and all eight reachable because the CLI had no tests
+at all — `tests/args.test.js` covers the command *plugin*'s parser, not
+`dist/cli/`.
+
+### Fixed
+
+- **`connection === 'open'` never fires while a session is unregistered.** Auth has
+  not completed, so there is nothing to be open *to*. `connected to WA` is a
+  Baileys **log line, not an event**, which is what makes this easy to misread.
+  Readiness is now a `qr` update, and it is awaited only when a pairing code is
+  actually requested — waiting on the QR path turned a working scan into a
+  timeout.
+- **`registered` is set in exactly one place in rc14** — the `companion_finish`
+  branch of `messages-recv.js:940` — and that notification does not arrive. A
+  fully provisioned device therefore read as unpaired and every socket-dependent
+  command refused to run. `isProvisioned()` now derives pairing from what
+  WhatsApp actually supplied: `me.id` plus `account.deviceSignature`.
+- **`creds.json` was truncated to 0 bytes by its own shutdown.** Baileys persists
+  with an async `writeFile` that truncates before writing, and the CLI watchdog
+  called `process.exit()` without waiting for it. An empty file is then read back
+  as a fresh session, so the next run silently re-paired. Saves are now serialised
+  and `dispose()` awaits the last one.
+- **`pair` could never request a pairing code.** rc14 emits a QR ref and never
+  volunteers one. `--phone` requests it, and is validated *before* the socket
+  opens so a typo costs no connection attempt.
+- **`--json pair` wrote to neither stream.** Pairing artifacts now go to stderr as
+  JSON lines, keeping the one-object stdout contract intact.
+- **`send` and `form` rejected bare phone numbers**, despite documenting them.
+  `toRecipientJid()` normalises; anything already carrying an `@` passes through.
+- **`withRetry`'s backoff sleep was `unref()`'d.** That timer is often the only
+  thing holding the event loop open, so a short-lived process died mid-backoff
+  with `Detected unsettled top-level await` and **no error at all** — the retry
+  simply never happened.
+- **`dist/cli/index.js` exited 0 having done nothing** when run directly. It now
+  dispatches; the barrel is unchanged for importers.
+
+### Added
+
+- `moderation` and `welcome` — group enforcement. Word, link and flood rules into
+  a configurable strike ladder (delete · mute · kick · ban), and join/leave/
+  promote/demote announcements with cooldown, per-event collapsing and rejoin
+  suppression. Both opt-in: who gets removed from a group is the operator's
+  decision, not the library's.
+- `announceAt` is wired, with `announceText` and per-kind defaults. Fires from
+  that rung upward, like every other rung.
+- `welcome` gained `dryRun`, mirroring `moderation`. Without it there was no way
+  to exercise the plugin against a live socket without posting to a real group.
+- `nyx-baileys selftest` — verifies the engine against a live session and sends
+  **nothing** unless `--send` (one message to Note to Self) or `--group`. Each
+  check declares its evidence class: `read`, `synthetic`, or `local`.
+- `pair --reset` recovers a half-negotiated session, which previously had no
+  recovery path at all.
+- GitHub Actions CI on Node 20 and 22, running typecheck, lint, build, test and
+  an export-map check.
+- `scripts/check-exports.mjs`. The `exports` map is a contract and `tsc` has no
+  opinion about whether its strings resolve.
+- `docs/HOW-IT-WORKS.md` — task-oriented, with a per-area table of what is
+  unit-tested versus what has actually run against WhatsApp.
+
+### Known limitations
+
+- **rc14 cannot send interactive messages.** `generateWAMessageContent` is an
+  if/else chain over the content keys it knows and its final `else` throws
+  `Invalid media type`, so `listMessage`, `buttonsMessage`, `templateMessage` and
+  `interactiveMessage` cannot be sent at all. Building the message by hand and
+  handing it to `relayMessage` returns a plausible message ID and delivers
+  nothing — verified on a physical phone, with and without the group-metadata
+  cache. The builders serialise correctly; only delivery is missing.
+- Template and native-flow messages are **WhatsApp Business** surfaces. Consumer
+  WhatsApp will not render them even once sending works.
+- Newsletter, and `stealth` / `metrics` / `webhooks` / `call-log` /
+  `read-receipts` / `send-presence` / `anti-delete`, are unit-tested but have
+  never been run against live WhatsApp.
+
+### Tests
+
+538 → **657**, 38 suites. Seven previously untested plugins now have coverage, and
+a flaky `JsonStore` autosave test was made deterministic rather than merely
+re-run.
+
+## [0.1.0]
+
+First tagged release. Named "Super Baileys" until v0.1.0; `SuperBaileys` and
+`createSuperBaileys` remain as deprecated aliases for one release. Internal event
+namespaces moved from `super.*` to `nyx.*`, which **is** breaking for anyone
+subscribing to them.
+
+[0.2.0]: https://github.com/nyx-dev-officials/Nyx-Baileys/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/nyx-dev-officials/Nyx-Baileys/releases/tag/v0.1.0

@@ -1,6 +1,6 @@
 # DESIGN NOTES — five features that were requested and not built
 
-Nyx-Baileys 0.1.0 · `@whiskeysockets/baileys@7.0.0-rc14` · Node ≥ 20
+Nyx-Baileys 0.2.0 · `@whiskeysockets/baileys@7.0.0-rc14` · Node ≥ 20
 
 ## Why this document exists
 

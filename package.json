@@ -1,6 +1,6 @@
 {
   "name": "nyx-baileys",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Hyper-modular WhatsApp client framework — upstream Baileys engine, decorated at runtime. No node_modules edits.",
   "type": "module",
   "main": "./dist/index.js",

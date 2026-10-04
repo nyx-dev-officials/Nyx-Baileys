@@ -34,7 +34,7 @@ import {
 import { Reporter, colourEnabled } from './output.js';
 
 export const PROGRAM = 'nyx-baileys';
-export const VERSION = '0.1.0';
+export const VERSION = '0.2.0';
 
 /** One source of truth: the command registry declares its own specs. */
 export const PARSER: ParserConfig = {

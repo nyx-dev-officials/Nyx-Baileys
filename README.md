@@ -347,6 +347,7 @@ And the deliberate one:
 |---|---|
 | [`ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | How the layers fit, the interception model, plugin ordering, and the rc14 API realities that cost the most time |
 | [`PLUGIN-API.md`](./docs/PLUGIN-API.md) | The `Plugin` interface, helper attachment, disposal, ordering, a complete worked example, and every socket helper the plugins add |
+| [`CHANGELOG.md`](./CHANGELOG.md) | Release history, including what rc14 still cannot do |
 | [`HOW-IT-WORKS.md`](./docs/HOW-IT-WORKS.md) | **Start here.** Task-oriented: "I want X, the code is Y" — with an honest per-area table of what is unit-tested versus what has actually run against WhatsApp |
 | [`FEATURES.md`](./docs/FEATURES.md) | 250 entries — 190 implemented, 60 specified — plus 43 candidates, each with a status tag and a risk note |
 | [`DESIGN-NOTES.md`](./docs/DESIGN-NOTES.md) | The five refused features, what was built instead, and why |
