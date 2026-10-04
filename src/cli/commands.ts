@@ -18,7 +18,7 @@
  * saved Signal key state half-written, which costs the user a re-pair.
  */
 
-import { appendFile, mkdir, readFile, readdir, stat } from 'node:fs/promises';
+import { appendFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join, resolve as resolvePath } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 
@@ -228,6 +228,42 @@ export function partialArtifacts(creds: Partial<CredsFile>): string[] {
   if (creds.pairingEphemeralKeyPair) found.push('pairingEphemeralKeyPair');
   if (creds.signedIdentityKey) found.push('signedIdentityKey');
   return found;
+}
+
+/**
+ * Write `registered: true` into a creds.json whose device is provisioned but
+ * whose flag never got set.
+ *
+ * rc14 sets that flag in exactly one place — the `companion_finish` branch of
+ * `messages-recv.js:940` — and that notification does not arrive on this path. So
+ * a session that paired perfectly still reports itself unpaired, and every
+ * socket-dependent command refuses it. `isProvisioned()` works around that by
+ * reading the evidence instead of the flag, but the flag is what the rest of the
+ * ecosystem reads — including upstream itself — so it is worth correcting once,
+ * at the moment we know the pairing succeeded.
+ *
+ * Only acts on a *provisioned* device. A fresh session has no `me.id` and no
+ * device signature, so this is a no-op until WhatsApp has genuinely signed it.
+ * Returns what it did so the caller can say so rather than implying it.
+ */
+export async function healRegisteredFlag(dir: string): Promise<{ healed: boolean; jid: string | null }> {
+  const file = join(resolvePath(dir), 'creds.json');
+  const creds = await readCreds(dir);
+  if (!creds) return { healed: false, jid: null };
+  if (creds.registered === true) return { healed: false, jid: creds.me?.id ?? null };
+  if (!isProvisioned(creds)) return { healed: false, jid: null };
+
+  try {
+    const parsed = JSON.parse(await readFile(file, 'utf8')) as Record<string, unknown>;
+    parsed.registered = true;
+    await writeFile(file, `${JSON.stringify(parsed, null, 2)}\n`, 'utf8');
+    return { healed: true, jid: (parsed.me as { id?: string } | undefined)?.id ?? null };
+  } catch (err) {
+    // A failed heal is not a failed pairing. The session still works through
+    // isProvisioned(), so this must never turn a good result into an error.
+    process.stderr.write(`note: could not correct the registered flag: ${messageOf(err)}\n`);
+    return { healed: false, jid: null };
+  }
 }
 
 interface SessionRecord {
@@ -741,6 +777,15 @@ async function cmdPair(ctx: CommandContext): Promise<ExitCode> {
       `paired, but the socket did not open within ${formatDuration(connectTimeout)}`,
       'the pairing is saved — run `nyx-baileys status` to check it',
     );
+  }
+
+  // Correct the flag rc14 never sets, now that we know the pairing worked.
+  // dispose() first so Baileys is not mid-write on the file — it is idempotent,
+  // so the shared lifecycle running it again afterwards is harmless.
+  await client.dispose();
+  const healed = await healRegisteredFlag(ctx.env.sessionDir);
+  if (healed.healed && !io.json) {
+    io.note(`corrected the \`registered\` flag on disk for ${healed.jid ?? 'this session'}`);
   }
 
   const number = sock.user?.id ?? null;

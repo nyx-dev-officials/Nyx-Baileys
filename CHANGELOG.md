@@ -100,7 +100,7 @@ at all — `tests/args.test.js` covers the command *plugin*'s parser, not
 
 ### Tests
 
-538 → **676**, 40 suites. Seven previously untested plugins now have coverage, a
+538 → **681**, 40 suites. Seven previously untested plugins now have coverage, a
 flaky `JsonStore` autosave test was made deterministic rather than merely
 re-run, and the `interactive` plugin ships with 14 tests of its own.
 

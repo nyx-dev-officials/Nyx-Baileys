@@ -32,7 +32,13 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { main } from '../dist/cli/main.js';
-import { isProvisioned, normalisePhone, partialArtifacts, toRecipientJid } from '../dist/cli/commands.js';
+import {
+  healRegisteredFlag,
+  isProvisioned,
+  normalisePhone,
+  partialArtifacts,
+  toRecipientJid,
+} from '../dist/cli/commands.js';
 import { Reporter } from '../dist/cli/output.js';
 
 const run = promisify(execFile);
@@ -435,4 +441,80 @@ test('an empty or unusable recipient is left for the parser to reject', () => {
   assert.equal(toRecipientJid(''), '');
   assert.equal(toRecipientJid('   '), '');
   assert.equal(toRecipientJid('not-a-number'), 'not-a-number', 'unchanged, so the real error survives');
+});
+
+/* ── healing the registered flag ──────────────────────────────────────── */
+
+/**
+ * `isProvisioned()` works *around* rc14 never setting `registered`. This heals
+ * it, so the rest of the ecosystem — upstream included — reads the truth.
+ *
+ * It must only ever fire on a genuinely provisioned device: a fresh session has
+ * no `me.id` and no signature, and writing `registered: true` there would make
+ * an unpaired session claim to be paired.
+ */
+test('a provisioned but unflagged session is healed on disk', async () => {
+  const dir = await sessionDir(PROVISIONED_UNFLAGGED);
+  try {
+    const before = await readFile(join(dir, 'creds.json'), 'utf8');
+    assert.equal(JSON.parse(before).registered, false);
+
+    const result = await healRegisteredFlag(dir);
+
+    assert.equal(result.healed, true);
+    assert.equal(result.jid, '6283831459585:11@s.whatsapp.net');
+    const after = JSON.parse(await readFile(join(dir, 'creds.json'), 'utf8'));
+    assert.equal(after.registered, true, 'the flag on disk was not corrected');
+    assert.equal(after.me.id, '6283831459585:11@s.whatsapp.net', 'the rest of the file survived');
+    assert(after.account.deviceSignature, 'and the signature survived');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a fresh session is never marked paired', async () => {
+  const dir = await sessionDir({ noiseKey: 'x' });
+  try {
+    const result = await healRegisteredFlag(dir);
+
+    assert.equal(result.healed, false, 'an unprovisioned session must not be flagged');
+    assert.equal(JSON.parse(await readFile(join(dir, 'creds.json'), 'utf8')).registered, undefined);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('healing is a no-op when the flag is already set', async () => {
+  const dir = await sessionDir({ registered: true, me: { id: '6283831459585:1@s.whatsapp.net' } });
+  try {
+    const result = await healRegisteredFlag(dir);
+
+    assert.equal(result.healed, false);
+    assert.equal(result.jid, '6283831459585:1@s.whatsapp.net');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a missing session is not an error', async () => {
+  const dir = await sessionDir(null);
+  try {
+    assert.deepEqual(await healRegisteredFlag(dir), { healed: false, jid: null });
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('after healing, the ordinary registered check passes without help', async () => {
+  const dir = await sessionDir(PROVISIONED_UNFLAGGED);
+  try {
+    await healRegisteredFlag(dir);
+
+    // The flag alone is now authoritative, which is the point of the heal.
+    const creds = JSON.parse(await readFile(join(dir, 'creds.json'), 'utf8'));
+    assert.equal(creds.registered, true);
+    assert.equal(isProvisioned(creds), true);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
