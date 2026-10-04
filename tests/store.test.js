@@ -228,18 +228,32 @@ test('a continuous stream of mutations still saves without waiting for quiet', a
   // The window is fixed, not sliding: a mutation must not push the deadline
   // out, or a bot receiving a message every 20ms with a 60ms window would never
   // save at all. So saves keep landing *during* the stream rather than after.
+  //
+  // The assertion has to be sampled *inside* the stream — once the mutations
+  // stop, an idle store saves anyway, and the test would pass even if the window
+  // were sliding. That makes it a test of timer latency as much as of behaviour,
+  // and a fixed 12-iteration loop flakes in CI: under load the 20ms sleeps
+  // overrun the 60ms window and no timer gets a chance to fire. So the stream
+  // runs for a wall-clock budget long enough that a fixed window *must* fire
+  // several times, while a sliding one still never fires at all.
   const { file, store, cleanup } = await scratch({ autosaveMs: 60 });
 
-  for (let i = 0; i < 12; i += 1) {
+  const STREAM_MS = 1500;
+  const deadline = Date.now() + STREAM_MS;
+  let savesDuringStream = 0;
+  let i = 0;
+
+  while (Date.now() < deadline) {
     store.set('tick', i);
+    i += 1;
     await sleep(20);
+    savesDuringStream = Math.max(savesDuringStream, store.stats().saves);
   }
 
-  const savesDuringStream = store.stats().saves;
   assert.ok(savesDuringStream >= 1, 'the stream starved the save — the window is sliding');
 
   await store.flush();
-  assert.equal((await JsonStore.open({ file })).get('tick'), 11);
+  assert.equal((await JsonStore.open({ file })).get('tick'), i - 1);
 
   await cleanup();
 });

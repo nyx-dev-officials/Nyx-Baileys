@@ -222,7 +222,7 @@ src/
   security/          validate · redact · permissions · acl · audit
   cli/               args · output
 bot/               command loader + createNyxBot host for bot scripts
-tests/               37 node:test suites, 631 tests
+tests/               38 node:test suites, 657 tests
 docs/                this file, ARCHITECTURE, PLUGIN-API, FEATURES,
                      DESIGN-NOTES, VERIFICATION, REF-FINDINGS, ANTIBAN
 ```
@@ -305,7 +305,7 @@ text was silently dropped on the wire. Every fix has a regression test in
 
 The verify chain is green as of 2026-10-03: `npm run check` and `npm run build`
 exit 0 under `strict` + `noUncheckedIndexedAccess`, and `npm test` reports
-**631 tests, 631 pass, 0 fail** in ~4s.
+**657 tests, 657 pass, 0 fail** in ~5s.
 
 The suite covers the primitives that everything else depends on — interception
 chaining and unwind, native-flow serialisation, album linkage, the jitter queue,

@@ -27,7 +27,7 @@ WhatsApp.
 | JID, text, format, validation, security, stores | yes | n/a — pure code |
 | **Buttons / list / template / native flow** | serialisation only | **no — rc14 cannot send these at all** |
 | **Newsletters** | **no dedicated suite** | **no** |
-| **`stealth`, `metrics`, `webhook`, `call-log`, `read-receipts`, `send-presence`, `anti-delete`** | **no** | **no** |
+| `stealth` · `metrics` · `webhooks` · `call-log` · `read-receipts` · `send-presence` · `anti-delete` | yes | **no** |
 | Polls, reactions, status, albums, media, presence | yes | **no** |
 
 Prefer to trust a row over a paragraph. Where this document is confidently wrong,

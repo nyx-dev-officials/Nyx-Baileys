@@ -54,8 +54,12 @@ export function fakeSocket(overrides = {}) {
       return { key: { id: `RELAY-${sock.sent.length}`, remoteJid: jid } };
     },
 
-    sendPresenceUpdate(presence) {
+    // Returns a promise because the real socket does. A double that returns
+    // undefined makes any plugin doing `sendPresenceUpdate(...).then(...)` throw
+    // a TypeError that has nothing to do with the plugin under test.
+    async sendPresenceUpdate(presence, jid) {
       sock.presence = presence;
+      sock.presenceJid = jid;
       return undefined;
     },
 
