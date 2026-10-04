@@ -625,7 +625,7 @@ re-exported from the root and from `nyx-baileys/plugins` (a new subpath entry).
 |---|---|---|
 | Typecheck | `npm run check` | 0 errors |
 | Build | `npm run build` | 0 errors |
-| Full suite | `npm test` | **657 / 657 pass, 0 fail** (was 538; +119) |
+| Full suite | `npm test` | **662 / 662 pass, 0 fail** (was 538; +124) |
 | Export surface | every `exports` target exists; `moderation`/`welcome` resolve from root and barrel | 0 missing |
 
 ### Five defects the new tests found
@@ -676,7 +676,7 @@ runs; the ordering and the ratio are what these numbers support.
 The CLI had **no tests at all**. `tests/args.test.js` covers
 `dist/utils/args.js` (the command *plugin*'s parser), not `dist/cli/`. Five of the
 six defects below sat in `src/cli/`, untested, and shipped. The suite is now
-**657 / 657** (was 587; +70, every one offline).
+**662 / 662** (was 587; +75, every one offline).
 
 ### Six defects
 

@@ -36,10 +36,18 @@ at all — `tests/args.test.js` covers the command *plugin*'s parser, not
   JSON lines, keeping the one-object stdout contract intact.
 - **`send` and `form` rejected bare phone numbers**, despite documenting them.
   `toRecipientJid()` normalises; anything already carrying an `@` passes through.
-- **`withRetry`'s backoff sleep was `unref()`'d.** That timer is often the only
-  thing holding the event loop open, so a short-lived process died mid-backoff
-  with `Detected unsettled top-level await` and **no error at all** — the retry
-  simply never happened.
+- **Three timers that resolve awaited promises were `unref()`'d.** `withRetry`'s
+  backoff sleep, `waitForAlbum`'s timeout, and `readReceiptVariance`'s
+  `readMessages` delay. An unref'd timer does not hold the event loop open, so in
+  a process where that timer is the only pending work Node concludes the loop is
+  empty and exits. The awaited promise then never settles and the caller's
+  `await` never returns — silently, with no error at all. It surfaced on CI as
+  four tests reported `cancelledByParent` alongside `# fail 0`, which is what
+  node does when the process exits part-way through a file. It never reproduced
+  locally because a dev machine always has other handles open.
+- **Background schedules are deliberately still `unref()`'d.** `humanEntropy`'s
+  activity timer must not be able to hold a short-lived script open, so both
+  directions are now pinned by tests.
 - **`dist/cli/index.js` exited 0 having done nothing** when run directly. It now
   dispatches; the barrel is unchanged for importers.
 
