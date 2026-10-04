@@ -47,3 +47,6 @@ Thumbs.db
 # Test + coverage
 coverage/
 .nyc_output/
+
+# Local scratch from tooling runs, not part of the project
+.freebuff/

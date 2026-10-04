@@ -1,11 +1,34 @@
 # Nyx-Baileys
 
+[![npm](https://img.shields.io/npm/v/nyx-baileys?style=flat-square&labelColor=1a1a1a&color=4ade80)](https://www.npmjs.com/package/nyx-baileys)
+[![license](https://img.shields.io/npm/l/nyx-baileys?style=flat-square&labelColor=1a1a1a&color=60a5fa)](./package.json)
+[![node](https://img.shields.io/badge/node-%3E%3D20-5FA04E?style=flat-square&labelColor=1a1a1a&color=22d3ee)](https://nodejs.org)
+[![tests](https://img.shields.io/badge/tests-631%20passing-22c55e?style=flat-square&labelColor=1a1a1a&color=22c55e)](./docs/VERIFICATION.md)
+[![upstream](https://img.shields.io/badge/upstream-baileys%20rc14-a78bfa?style=flat-square&labelColor=1a1a1a&color=a78bfa)](https://github.com/WhiskeySockets/Baileys)
+[![ci](https://github.com/nyx-dev-officials/Nyx-Baileys/actions/workflows/ci.yml/badge.svg)](https://github.com/nyx-dev-officials/Nyx-Baileys/actions/workflows/ci.yml)
+[![last commit](https://img.shields.io/github/last-commit/nyx-dev-officials/Nyx-Baileys?style=flat-square&labelColor=1a1a1a&color=94a3b8)](https://github.com/nyx-dev-officials/Nyx-Baileys/commits/main)
+
 A hyper-modular WhatsApp client framework. It takes upstream
 [`@whiskeysockets/baileys`](https://github.com/WhiskeySockets/Baileys) v7, decorates
 the live socket at runtime with a chain of ordered plugins, and hands you back a
 real Baileys socket. No fork, no vendored copy, no edit to `node_modules`.
 
-Version 0.1.0 · upstream `7.0.0-rc14` · Node ≥ 20 · MIT
+> **Start here → [`docs/HOW-IT-WORKS.md`](./docs/HOW-IT-WORKS.md).** Task-oriented:
+> *"I want X, the code is Y"* — with an honest table of what is unit-tested versus
+> what has actually run against WhatsApp.
+
+## Contents
+
+- [Quickstart](#60-second-quickstart)
+- [Architecture](#architecture-in-one-paragraph)
+- [Performance](#performance-and-the-lite-entry)
+- [Group moderation](#group-moderation)
+- [Running a bot](#running-a-bot)
+- [Capability coverage](#capability-coverage)
+- [Honest limitations](#honest-limitations)
+- [Documentation](#documentation)
+
+---
 
 ## 60-second quickstart
 
@@ -241,7 +264,7 @@ pass. Status is `VERIFICATION.md`'s, updated where a fix changed it.
 | # | Capability | Status | Where |
 |---|---|---|---|
 | 1 | Upstream protocol engine | covered | `core/socket.ts:83` |
-| 2 | Native flow / interactive layouts | **serialises, cannot send** | `core/nodes.ts:61`, `:90`, `:151` — rc14 rejects `interactiveMessage`; see [Buttons](#buttons-and-interactive-layouts) |
+| 2 | Native flow / interactive layouts | **serialises, cannot send** | `core/nodes.ts:61`, `:90`, `:151` — rc14 rejects `interactiveMessage`; see [Buttons](./docs/HOW-IT-WORKS.md#buttons-and-interactive-layouts) |
 | 3 | Album container (receive) | covered | `plugins/album.ts:62`, `:90` — was broken by D1 |
 | 4 | Anti-spam jitter queue | covered | `plugins/antiSpam.ts:46`, `:66` |
 | 5 | Identity and presence | covered | `plugins/stealth.ts:37`, `:53` |
