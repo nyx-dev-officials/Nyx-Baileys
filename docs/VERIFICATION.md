@@ -625,7 +625,7 @@ re-exported from the root and from `nyx-baileys/plugins` (a new subpath entry).
 |---|---|---|
 | Typecheck | `npm run check` | 0 errors |
 | Build | `npm run build` | 0 errors |
-| Full suite | `npm test` | **587 / 587 pass, 0 fail** (was 538; +49) |
+| Full suite | `npm test` | **631 / 631 pass, 0 fail** (was 538; +93 — see §8) |
 | Export surface | every `exports` target exists; `moderation`/`welcome` resolve from root and barrel | 0 missing |
 
 ### Five defects the new tests found
@@ -668,3 +668,142 @@ framework's own barrel — **not** because it avoids the engine. `plugins/mentio
 imports `proto` from upstream at runtime, so the protobuf stack loads either
 way. Only `lite` avoids it. Absolute values drift ~2x on this machine between
 runs; the ordering and the ratio are what these numbers support.
+
+---
+
+## 8. Pairing path repair — 2026-10-04
+
+The CLI had **no tests at all**. `tests/args.test.js` covers
+`dist/utils/args.js` (the command *plugin*'s parser), not `dist/cli/`. Five of the
+six defects below sat in `src/cli/`, untested, and shipped. The suite is now
+**631 / 631** (was 587; +44, every one offline).
+
+### Six defects
+
+| # | Defect | Fix |
+|---|---|---|
+| 1 | `pair` could never show a code — rc14 emits a QR ref, and nothing called `requestPairingCode` | `--phone <number>`; validated before the socket opens |
+| 2 | `--json pair` wrote nothing to *either* stream | `Reporter.pairing()` → stderr as JSON lines; stdout keeps its one-object contract |
+| 3 | A half-negotiated `creds.json` looked like an auth failure | pre-flight guard + `pair --reset`; `sessions list` reports `partial` |
+| 4 | `node dist/cli/index.js` exited 0 having done nothing | dispatches when run directly; barrel semantics unchanged for importers |
+| 5 | **`connection === 'open'` never fires while unregistered** | `waitForReady()` accepts a `qr` update |
+| 6 | `announceAt` was declared but wired to nothing | wired, with `announceText` and per-kind defaults |
+
+### Defect 5 is the expensive one, and it was in the original handoff
+
+The handoff's recipe said to wait for `connection === 'open'` before requesting a
+pairing code. **That never arrives on an unregistered session.** Measured, one
+session, no creds on disk:
+
+```
+   571ms  connect() resolved
+  1555ms  connected to WA  { helloMsg: { clientHello: … } }
+  1555ms  connection.update {"qr":"https://wa.me/settings/linked_devices#2@…"}
+ 45175ms  state: unknown            <-- `connection` still unset at 45s
+```
+
+`connected to WA` is a **Baileys log line, not an event** — reading it as proof
+that `open` fired is the trap. `requestPairingCode` then succeeded **105 ms after
+the `qr` update**, never having seen `open`.
+
+Consequences worth keeping:
+
+- A poll of `connectionState.state` — the obvious check, and what the other
+  commands use — never returns `open` on the pairing path.
+- Readiness only needs waiting on when a *code* is requested. The QR-scan path
+  must not wait, or a working scan becomes a timeout.
+- The capture listener and the readiness listener must be attached in the same
+  tick: the first `qr` arrives in the very event that satisfies readiness, so a
+  listener attached after the await sees nothing. This cost one debugging round
+  during the live run.
+
+### Codes cannot survive a human relay
+
+Three code-based attempts were rejected by WhatsApp as *incorrect* with the
+socket healthy — no 401, no 428, no close. Latency, not protocol: a code is void
+~30 s after issue. Re-requesting on a timer to keep a "fresh" one available
+**invalidates the previous code**, so rotating every 12 s guarantees the code
+just relayed is superseded before it is typed. Request one code, or use the QR —
+the camera reads it in about a second and it rotates on its own.
+
+### Where pairing actually stopped
+
+```
+   1378ms  pairing ref captured, ws.isOpen=true
+            registrationId assigned; Noise ratchet exchanged (remoteIdentityKey)
+ 05:58:22  stream:error 515                    (restart required)
+ 05:58:51  stream:error 401 conflict/device_removed
+```
+
+Further than any earlier attempt — a real ratchet completed — then the server
+removed the device. Ruled out: connectivity (`wss://web.whatsapp.com/ws/chat`
+upgrades 101) and version pinning (`fetchLatestWaWebVersion()` succeeds here,
+returning `[2,3000,1049240009]`, so the hardcoded fallback at
+`src/core/socket.ts:59` is never reached).
+
+**No session has ever been paired on this account.** Everything past
+`creds.registered === true` remains unverified against a live server.
+
+### 7. Pairing does work — `registered` is the only thing broken
+
+The run that finally paired settled the open question from §8, and the answer
+inverted the earlier conclusion. It is not the account refusing the link.
+
+```
+logging in...  device: 11, pull: true
+clean dirty bits account_sync
+406 pre-keys found on server
+PreKey validation passed — Server: 406, Current prekey 812 exists
+Connection is now AwaitingInitialSync → Online
+opened connection to WA
+Own LID session created successfully
+  myPN  : 6283831459585:11@s.whatsapp.net
+  myLID : 27836421259416:11@lid
+```
+
+Throughout that, `creds.registered` read **`false`**. So Baileys paired the
+device, WhatsApp signed it, and the client still reported itself unpaired.
+
+**Root cause.** `authState.creds.registered = true` has exactly one assignment in
+all of rc14 — `messages-recv.js:940`, inside the `companion_finish` branch of the
+`link_code_companion_reg` notification. That notification does not arrive on this
+path, so the flag never flips. Every command gated on it (`requirePaired`) then
+refuses a session that is fully working.
+
+The provisioning evidence is unambiguous and server-supplied:
+
+| field | meaning |
+|---|---|
+| `account.details`, `accountSignature`, `accountSignatureKey` | WhatsApp signed this account |
+| `account.deviceSignature` | WhatsApp signed this device |
+| `me.id`, `me.lid` | identity and LID mapping assigned |
+| `routingInfo` | routes provisioned |
+| `platform` | assigned (`android`) |
+
+**Fix.** `isProvisioned()` in `src/cli/commands.ts` derives `paired` from that
+evidence rather than the flag: `registered === true || (me.id && account.deviceSignature)`.
+The flag is client-side bookkeeping; the signature is WhatsApp's own statement.
+`partialArtifacts()` defers to it too, so `pair --reset` can no longer delete a
+working session. Verified against the live account with the flag forced to
+`false`: `status` reports `paired: true`, `state: open`, exit 0.
+
+### 8. `creds.json` was being truncated to 0 bytes by its own shutdown
+
+A provisioned, paired session was destroyed and reported as "fresh, unpaired" —
+with no error anywhere.
+
+Baileys persists creds with an async `writeFile`, which truncates before it
+writes. Two consequences, both observed:
+
+1. **Concurrent saves interleave**, producing malformed JSON.
+2. **Exiting with a save in flight leaves `creds.json` at 0 bytes.** An empty file
+   is then read back as a fresh session, so the next run silently starts pairing
+   from scratch. `bin/nyx-baileys.js` made this likely: its watchdog calls
+   `process.exit()`, which does not wait for pending writes.
+
+Fix, in `src/nyxBaileys.ts`: `saveCreds` is chained so writes are serialised, the
+tail is retained, and `dispose()` awaits it. Covered by a test that fires two
+back-to-back saves and asserts the file still parses and is non-empty.
+
+This plausibly explains a share of the "half-negotiated creds" in §5.5 — some of
+those sessions were self-inflicted by shutdown, not by WhatsApp.

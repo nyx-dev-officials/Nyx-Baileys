@@ -19,7 +19,8 @@ import type { Plugin } from '../utils/types.js';
  * ## Why this plugin exists at all
  *
  * rc14 can *create* polls through `sendMessage({ poll })` and that path is
- * solid — but it is one-way. Three gaps forced this plugin:
+ * solid — and, because a poll creation is a real message, anti-spam paces it
+ * like any other send. But it is one-way. Three gaps forced this plugin:
  *
  *   1. **No vote sender.** `AnyRegularMessageContent` has no poll-vote variant,
  *      so a vote has to be built and relayed by hand.
@@ -306,6 +307,13 @@ export function polls(options: PollsOptions = {}): Plugin {
         // construction itself is all generated protobuf constructors.
         const message = proto.Message.create({ pollUpdateMessage: update });
         const messageId = generateMessageID();
+
+        // Deliberately NOT paced. A vote is an action on a poll that already
+        // exists — the same category anti-spam bypasses for reactions and
+        // revokes — and it cannot ride `sendMessage` at all, because rc14 has
+        // no poll-vote content key. So it goes out on `relayMessage`, which
+        // anti-spam does not gate. Creation is the opposite case: it is a real
+        // message, built with the native `poll` key, and anti-spam paces it.
         await ctx.sock.relayMessage(poll.jid, message, { messageId });
 
         // Apply locally: we cannot read back our own relayed node, and waiting

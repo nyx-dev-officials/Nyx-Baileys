@@ -258,6 +258,25 @@ export class Reporter {
     }
   }
 
+  /**
+   * Pairing artifacts — the phone code and the QR ref.
+   *
+   * These are the only thing the operator has while pairing, so they must not be
+   * swallowed. They also cannot go to stdout under `--json`, which promises one
+   * object per run. So they go to stderr as JSON lines instead: stdout stays
+   * parseable and the code still reaches whoever is watching.
+   */
+  pairing(rows: readonly (readonly [string, string])[]): void {
+    if (rows.length === 0) return;
+    if (this.json) {
+      for (const [key, value] of rows) {
+        this.#err.write(`${JSON.stringify({ pairing: key, value })}\n`);
+      }
+      return;
+    }
+    this.fields(rows);
+  }
+
   table(headers: readonly string[], rows: readonly (readonly string[])[], options: TableOptions = {}): void {
     if (this.json || rows.length === 0) return;
     for (const line of renderTable(headers, rows, options)) this.line(line);

@@ -613,7 +613,23 @@ that does not define it gets a logged warning and a socket left down.
 |---|---|---|
 | `__antispam` | `{ setPressure(n); stats(); reset() }` | Queue controls |
 
-Patches `sendMessage` and `relayMessage` behind a serial queue. Gaps are
+Patches `sendMessage` behind a serial queue. `relayMessage` is deliberately
+**not** gated: the poll plugin, protocol messages and the interactive-message
+workaround drive it directly, and pushing those through a multi-second pacing
+queue is latency on machinery this plugin does not own. Within `sendMessage`,
+content that compiles to a reaction or a protocol message rather than new chat
+content — `react`, `edit`, `delete`, `pin`, `disappearingMessagesInChat`,
+`sharePhoneNumber`, `limitSharing` — also bypasses the queue **and** the
+per-minute ceiling (`antiSpam.ts:59-79`). A reaction is not a send, and a burst
+of revokes while moderating must not fill the send queue or trip the send cap.
+A key counts only when its value is non-nullish, matching upstream's own
+`hasNonNullishProperty`, so `{ text, react: undefined }` is still a paced text
+send. `forward`, `poll`, `event`, `album`, media and text stay paced — poll
+*creation* included, because it is a real message built with the native `poll`
+key. A poll **vote** rides `relayMessage` instead (rc14 has no poll-vote content
+key), and `closePoll` is a withdrawal vote, so both are deliberately unpaced: an
+action on an existing poll, like a reaction. `tests/poll-pacing.test.js` pins
+both halves of that split. Gaps are
 Box–Muller, clamped to ±2.5σ (`antiSpam.ts:46-52`) — a bounded distribution, not
 `random(0, max)`, which clusters at zero. Defaults: 2 500 ms minimum gap, 4 000 ms
 jitter, 20/minute ceiling, 500-message queue cap; over the cap, sends are

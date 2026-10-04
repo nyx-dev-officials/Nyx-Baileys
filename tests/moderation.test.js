@@ -436,3 +436,115 @@ test('dispose clears the moderation state', async () => {
   harness.dispose();
   assert.equal(sock.__moderation.stats().muted, 0);
 });
+/* ── announceAt ───────────────────────────────────────────────────────── */
+
+/** Sends into the group that are announcements rather than deletes. */
+const posts = (sock) => sock.sent.filter((s) => s.content?.text);
+
+test('nothing is posted into the group unless announceAt is configured', async () => {
+  const { sock, say } = rig({ words: [{ pattern: 'scam' }], strikes: { kickAt: 2 } });
+
+  await say('scam');
+  await say('scam');
+
+  assert.equal(posts(sock).length, 0, 'Infinity means off, not "very high"');
+});
+
+test('announceAt posts into the group from that strike upward', async () => {
+  const { sock, say } = rig({
+    words: [{ pattern: 'scam' }],
+    strikes: { announceAt: 2, kickAt: 3 },
+  });
+
+  await say('scam');
+  assert.equal(posts(sock).length, 0, 'below the rung, nothing is said');
+
+  await say('scam');
+  assert.equal(posts(sock).length, 1);
+
+  await say('scam');
+  assert.equal(posts(sock).length, 2, 'the same >= shape as every other rung, so it keeps firing');
+});
+
+test('the announcement names the outcome, not the rule that fired', async () => {
+  const { sock, say } = rig({
+    words: [{ pattern: 'scam' }],
+    strikes: { announceAt: 1, muteAt: 1, muteMs: 600_000 },
+  });
+
+  await say('scam');
+
+  const [post] = posts(sock);
+  assert.match(post.content.text, /^Muted 1 for 10m\.$/);
+});
+
+test('a kick announcement reports the strike that caused it', async () => {
+  const { sock, say } = rig({ words: [{ pattern: 'scam' }], strikes: { announceAt: 2, kickAt: 2 } });
+
+  await say('scam');
+  await say('scam');
+
+  const post = posts(sock).at(-1);
+  assert.match(post.content.text, /^Removed 1 — strike 2\.$/);
+});
+
+test('announceText replaces the wording, and an empty string silences it', async () => {
+  const withText = rig({
+    words: [{ pattern: 'scam' }],
+    strikes: { announceAt: 1 },
+    announceText: (e) => `custom line for strike ${e.strikes}`,
+  });
+  await withText.say('scam');
+  assert.match(posts(withText.sock).at(-1).content.text, /custom line for strike 1/);
+
+  const silenced = rig({
+    words: [{ pattern: 'scam' }],
+    strikes: { announceAt: 1 },
+    announceText: () => '',
+  });
+  await silenced.say('scam');
+  assert.equal(posts(silenced.sock).length, 0);
+});
+
+test('a dry run decides the announcement but does not post it', async () => {
+  const { sock, say, events } = rig({
+    words: [{ pattern: 'scam' }],
+    strikes: { announceAt: 1, banAt: 1 },
+    dryRun: true,
+  });
+
+  await say('scam');
+
+  assert.equal(posts(sock).length, 0, 'posting into a group is a visible side effect');
+  assert.equal(events.length, 1, 'but the decision is still reported');
+  assert.equal(events[0].kind, 'ban');
+});
+
+test('the announcement goes out after the removal, not before', async () => {
+  const order = [];
+  const sock = fakeSocket();
+  sock.ev.on('nyx.moderation', () => order.push('event'));
+  sock.groupParticipantsUpdate = () => order.push('remove');
+  const original = sock.sendMessage.bind(sock);
+  sock.sendMessage = (jid, content, extra) => {
+    if (content?.text) order.push('post');
+    return original(jid, content, extra);
+  };
+
+  const harness = applyPlugin(
+    moderation({ words: [{ pattern: 'scam' }], strikes: { announceAt: 1, kickAt: 1 } }),
+    sock,
+  );
+
+  upsert(sock, [
+    {
+      key: { remoteJid: GROUP, id: 'M-order', participant: pn(1) },
+      messageTimestamp: 1_700_000_000_000,
+      message: { conversation: 'scam' },
+    },
+  ]);
+  await flush();
+  harness.dispose();
+
+  assert.deepEqual(order, ['remove', 'post', 'event']);
+});

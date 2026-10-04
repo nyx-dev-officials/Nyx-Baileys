@@ -190,10 +190,22 @@ export interface RetryOptions {
   onRetry?: (error: unknown, attempt: number, delayMs: number) => void;
 }
 
+/**
+ * The backoff sleep between retries.
+ *
+ * Deliberately NOT unref'd. This timer is frequently the only thing holding the
+ * event loop open — a short-lived script or a CLI that calls `withRetry` and
+ * awaits it has nothing else pending — and an unref'd timer lets Node decide the
+ * loop is empty and exit. The observable result is that the retry never happens:
+ * the process dies mid-backoff with `Warning: Detected unsettled top-level await`
+ * and the caller sees no error at all, which is exactly the failure the retry
+ * existed to prevent. Measured on 2026-10-04.
+ *
+ * `sleep` is injectable, so tests still run instantly via `sleep: () => Promise.resolve()`.
+ */
 const realSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref?.();
+    setTimeout(resolve, ms);
   });
 
 /**

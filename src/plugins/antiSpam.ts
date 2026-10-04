@@ -6,11 +6,23 @@ import type { AntiSpamOptions, Plugin } from '../utils/types.js';
  * Anti-spam pacing.
  *
  * A human does not send 500 messages in a burst, and more importantly a human
- * does not send them on a metronome. This wraps `sendMessage` and
- * `relayMessage` in a queue that spaces sends with a jittered gap and enforces
- * a per-minute ceiling. The delay is drawn from a bounded distribution rather
+ * does not send them on a metronome. This wraps the outbound `sendMessage`
+ * entry point in a queue that spaces sends with a jittered gap and enforces a
+ * per-minute ceiling. The delay is drawn from a bounded distribution rather
  * than `random(0, max)` so it doesn't cluster at zero, and it is *widened* when
  * health has been elevated.
+ *
+ * Only `sendMessage` is gated. `relayMessage` is the lower-level path other
+ * layers drive directly — the poll plugin, protocol messages, the
+ * interactive-message workaround — and pushing those through a 2.5–6.5 s queue
+ * is not anti-spam, it is latency on machinery this plugin does not own. Gating
+ * it also meant every such call paid the queue's gap before going out, which
+ * looked exactly like the send path hanging.
+ *
+ * And within `sendMessage`, only real messages are paced. Reactions, edits,
+ * revokes, pins and the disappearing-messages toggle go straight out — see
+ * `NON_MESSAGE_KEYS` — so they neither wait out a gap nor consume the
+ * per-minute ceiling meant for sends.
  *
  * Scope: outbound pacing. It does not fabricate presence — see `docs/DESIGN-NOTES.md`.
  */
@@ -21,6 +33,51 @@ const DEFAULTS: AntiSpamOptions = {
   maxPerMinute: 20,
   maxQueue: 500,
 };
+
+/**
+ * `sendMessage` content keys that compile to a reaction or a *protocol* message
+ * — an action on an existing message or account, not new chat content.
+ *
+ *   react                     → `reactionMessage`
+ *   edit                      → text plus the edit wire attribute
+ *   delete                    → `protocolMessage` REVOKE
+ *   pin                       → `pinInChatMessage`
+ *   disappearingMessagesInChat→ disappearing-setting protocol message
+ *   sharePhoneNumber          → `protocolMessage` SHARE_PHONE_NUMBER
+ *   limitSharing              → `protocolMessage` LIMIT_SHARING
+ *
+ * Every key here was read out of rc14's own content chain
+ * (`Utils/messages.js:276-480`, `Socket/messages-send.js:1053-1140`), not
+ * guessed. Content that compiles to a real message — `forward`, `poll`,
+ * `event`, `album`, `buttonReply`, `listReply`, `groupInvite`, `product`,
+ * media, text — deliberately stays paced.
+ *
+ * Why bypass them: they are not outbound sends, so pacing them is pure stall. A
+ * user taps a reaction and it waits out a 2.5–6.5 s gap for no reason, and a
+ * burst of revokes while moderating can fill a 500-message queue.
+ */
+const NON_MESSAGE_KEYS = [
+  'react',
+  'edit',
+  'delete',
+  'pin',
+  'disappearingMessagesInChat',
+  'sharePhoneNumber',
+  'limitSharing',
+] as const;
+
+/**
+ * True when `sendMessage` content is an action, not a message to pace.
+ *
+ * A key only counts when its value is non-nullish, matching upstream's own
+ * `hasNonNullishProperty` test — so `{ text: 'hi', react: undefined }` is still
+ * a paced text send, not a bypass.
+ */
+function isNonMessage(content: unknown): boolean {
+  if (!content || typeof content !== 'object') return false;
+  const rec = content as Record<string, unknown>;
+  return NON_MESSAGE_KEYS.some((key) => rec[key] !== undefined && rec[key] !== null);
+}
 
 interface QueueItem {
   run: () => Promise<unknown>;
@@ -85,14 +142,20 @@ export function antiSpam(user: Partial<AntiSpamOptions> = {}): Plugin {
         }
       };
 
-      /** Wrap a socket method so every call passes the queue. */
-      const gate = (name: string, fn: (...args: never[]) => unknown): void => {
-        void fn;
+      /**
+       * Wrap a socket method so every call passes the queue, unless `bypass`
+       * recognises it as something that is not an outbound message.
+       */
+      const gate = (name: string, bypass?: (args: unknown[]) => boolean): void => {
         const handle = patch(ctx.sock as never, name, ((
           original: (...args: unknown[]) => unknown,
           self: unknown,
           args: unknown[],
         ): Promise<unknown> => {
+          if (bypass?.(args)) {
+            // Straight out, uncounted and unqueued — it is not a send.
+            return Promise.resolve(Reflect.apply(original, self, args));
+          }
           if (queue.length >= cfg.maxQueue) {
             return Promise.reject(new QueueFullError(cfg.maxQueue));
           }
@@ -112,8 +175,8 @@ export function antiSpam(user: Partial<AntiSpamOptions> = {}): Plugin {
         }
       };
 
-      gate('sendMessage', ctx.sock.sendMessage as never);
-      gate('relayMessage', ctx.sock.relayMessage as never);
+      // `sendMessage(jid, content, options)` — content is always argument 1.
+      gate('sendMessage', (args) => isNonMessage(args[1]));
 
       // Widen or tighten pacing from outside (health plugin, admin command).
       (ctx.sock as unknown as Record<string, unknown>).__antispam = {

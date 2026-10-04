@@ -13,11 +13,18 @@ Version 0.1.0 · upstream `7.0.0-rc14` · Node ≥ 20 · MIT
 npm install nyx-baileys
 ```
 
-Pair a number — Baileys prints the QR in your terminal, scan it from
-**WhatsApp → Linked devices**:
+Pair a number. rc14 removed terminal QR rendering, so ask for the 8-character
+code and type it in via **WhatsApp → Linked devices → Link a device**:
 
 ```bash
-SESSION_DIR=./session node dist/index.js --pair
+npx nyx-baileys pair --dir ./session --phone 628334549585
+```
+
+No `--phone` and it waits for a QR scan instead, printing the ref. The code is
+void about 30 s after it is issued, so have the phone open first.
+
+```bash
+npx nyx-baileys status --dir ./session     # is it paired, and what state
 ```
 
 Send something:
@@ -41,7 +48,7 @@ const sock = await client.connect();           // real WASocket, 13 plugins appl
 await sock.sendMessage('15551234567@s.whatsapp.net', { text: 'hello' });
 
 console.log(client.applied);   // ['stealth','lid-router','media-stream',…]
-console.log(client.patchCount); // 8 live patches
+console.log(client.patchCount); // live runtime patches
 
 await client.dispose();
 ```
@@ -68,7 +75,7 @@ that cannot be socket methods without lying about its type — `resolveJid`,
 `Object.defineProperty(..., {enumerable: false})` and consumed through one
 explicit cast. Nothing in `node_modules` is touched at any point.
 
-Full detail: [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+Full detail: [`ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 
 ## Performance and the `lite` entry
 
@@ -192,7 +199,7 @@ src/
   security/          validate · redact · permissions · acl · audit
   cli/               args · output
 bot/               command loader + createNyxBot host for bot scripts
-tests/               30 node:test suites, 417 tests
+tests/               37 node:test suites, 631 tests
 docs/                this file, ARCHITECTURE, PLUGIN-API, FEATURES,
                      DESIGN-NOTES, VERIFICATION, REF-FINDINGS, ANTIBAN
 ```
@@ -234,7 +241,7 @@ pass. Status is `VERIFICATION.md`'s, updated where a fix changed it.
 | # | Capability | Status | Where |
 |---|---|---|---|
 | 1 | Upstream protocol engine | covered | `core/socket.ts:83` |
-| 2 | Native flow / interactive layouts | covered | `core/nodes.ts:61`, `:90`, `:151` |
+| 2 | Native flow / interactive layouts | **serialises, cannot send** | `core/nodes.ts:61`, `:90`, `:151` — rc14 rejects `interactiveMessage`; see [Buttons](#buttons-and-interactive-layouts) |
 | 3 | Album container (receive) | covered | `plugins/album.ts:62`, `:90` — was broken by D1 |
 | 4 | Anti-spam jitter queue | covered | `plugins/antiSpam.ts:46`, `:66` |
 | 5 | Identity and presence | covered | `plugins/stealth.ts:37`, `:53` |
@@ -275,14 +282,16 @@ text was silently dropped on the wire. Every fix has a regression test in
 
 The verify chain is green as of 2026-10-03: `npm run check` and `npm run build`
 exit 0 under `strict` + `noUncheckedIndexedAccess`, and `npm test` reports
-**305 tests, 305 pass, 0 fail** in ~2.5s.
+**631 tests, 631 pass, 0 fail** in ~4s.
 
 The suite covers the primitives that everything else depends on — interception
 chaining and unwind, native-flow serialisation, album linkage, the jitter queue,
 payload normalisation, memory bounds, group thresholds, flow extraction — but it
-runs against fake sockets. Nothing here has been exercised against a live paired
-account, so poll votes, newsletters and client-side form rendering are
-unverified end to end.
+runs against fake sockets. A number is now paired and live, and connection,
+login, credential persistence and plain-text delivery are verified against it —
+including by screenshot on a physical phone. Everything else below still rests on
+unit tests alone, and [HOW-IT-WORKS.md](./docs/HOW-IT-WORKS.md) carries an
+honest per-area status table.
 
 A few functional limits, stated plainly:
 
@@ -290,11 +299,12 @@ A few functional limits, stated plainly:
   interval rather than continuously, so the multiplier can lag the true session
   age by up to an hour.
 - **Flow state is in memory**, so a restart drops in-flight conversations.
-- **Group policy is report-only.** There is no enforcement surface; the framework
-  supplies a signal and a hook, and the decision stays with the operator.
+- **Group enforcement is opt-in.** `groupGuard` is report-only, but `moderation` is a
+  real surface — delete, mute, kick and ban. It is off by default because who gets
+  removed from a group is the operator's decision, not the library's.
 - **The anti-ban pack is opt-in and its effect is not measurable here.** Its
   mechanics are unit-tested; whether it actually helps an account is not
-  something this repository can claim. [`ANTIBAN.md`](./ANTIBAN.md).
+  something this repository can claim. [`ANTIBAN.md`](./docs/ANTIBAN.md).
 
 The project was named "Super Baileys" until v0.1.0. `SuperBaileys` and
 `createSuperBaileys` remain as deprecated aliases for one release so the rename
@@ -306,23 +316,24 @@ And the deliberate one:
 - **Five requested capabilities were not built**, four because they exist to
   defeat abuse detection and one because it cannot work. They are documented
   individually, with mechanisms and reasoning, in
-  [`DESIGN-NOTES.md`](./DESIGN-NOTES.md).
+  [`DESIGN-NOTES.md`](./docs/DESIGN-NOTES.md).
 
 ## Documentation
 
 | Document | What is in it |
 |---|---|
-| [`ARCHITECTURE.md`](./ARCHITECTURE.md) | How the layers fit, the interception model, plugin ordering, and the rc14 API realities that cost the most time |
-| [`PLUGIN-API.md`](./PLUGIN-API.md) | The `Plugin` interface, helper attachment, disposal, ordering, a complete worked example, and every socket helper the plugins add |
-| [`FEATURES.md`](./FEATURES.md) | 250 entries — 190 implemented, 60 specified — plus 43 candidates, each with a status tag and a risk note |
-| [`DESIGN-NOTES.md`](./DESIGN-NOTES.md) | The five refused features, what was built instead, and why |
-| [`VERIFICATION.md`](./VERIFICATION.md) | Coverage matrix and the defect report that started all this |
-| [`REF-FINDINGS.md`](./REF-FINDINGS.md) | Survey of 12 reference forks: 40 portable techniques, 15 classified EVASION |
-| [`ANTIBAN.md`](./ANTIBAN.md) | The opt-in anti-ban module set: what it does, how to enable it, and what is deliberately not ported |
+| [`ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | How the layers fit, the interception model, plugin ordering, and the rc14 API realities that cost the most time |
+| [`PLUGIN-API.md`](./docs/PLUGIN-API.md) | The `Plugin` interface, helper attachment, disposal, ordering, a complete worked example, and every socket helper the plugins add |
+| [`HOW-IT-WORKS.md`](./docs/HOW-IT-WORKS.md) | **Start here.** Task-oriented: "I want X, the code is Y" — with an honest per-area table of what is unit-tested versus what has actually run against WhatsApp |
+| [`FEATURES.md`](./docs/FEATURES.md) | 250 entries — 190 implemented, 60 specified — plus 43 candidates, each with a status tag and a risk note |
+| [`DESIGN-NOTES.md`](./docs/DESIGN-NOTES.md) | The five refused features, what was built instead, and why |
+| [`VERIFICATION.md`](./docs/VERIFICATION.md) | Coverage matrix and the defect report that started all this |
+| [`REF-FINDINGS.md`](./docs/REF-FINDINGS.md) | Survey of 12 reference forks: 40 portable techniques, 15 classified EVASION |
+| [`ANTIBAN.md`](./docs/ANTIBAN.md) | The opt-in anti-ban module set: what it does, how to enable it, and what is deliberately not ported |
 
 ## License
 
-MIT. See [`package.json`](../package.json).
+MIT. See [`package.json`](./package.json).
 
 This project is not affiliated with, endorsed by, or connected to WhatsApp or
 Meta. It automates accounts you own. Read WhatsApp's Terms of Service before

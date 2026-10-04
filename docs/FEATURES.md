@@ -227,7 +227,7 @@ re-proposes them.
 | 98 | Sliding-window ceiling | `plugins` | Per-minute cap over a 60 s sliding window; exceeding it throws naming the ceiling. `plugins/antiSpam.ts:55-64` |
 | 99 | Queue cap rejects | `plugins` | Past 500 queued, sends are rejected instead of the queue growing unbounded. `plugins/antiSpam.ts:97-99` |
 | 100 | `__antispam` controls | `plugins` | `setPressure(n)` multiplies gaps (clamped ≥1), `stats()`, `reset()`. `plugins/antiSpam.ts:120-130` |
-| 101 | Both send paths gated | `plugins` | `sendMessage` and `relayMessage`, each checked for `.applied` with a named warning. `plugins/antiSpam.ts:109-117` |
+| 101 | Outbound sends gated, actions bypassed | `plugins` | `sendMessage` only, checked for `.applied` with a named warning; `relayMessage` is left to the layers that own it. Reactions, edits, revokes, pins, `sharePhoneNumber`, `limitSharing` and the disappearing toggle skip both the queue and the ceiling — they are not sends. `plugins/antiSpam.ts:59-79`, `:179` |
 
 ## plugins / flow (7)
 

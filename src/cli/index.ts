@@ -6,6 +6,8 @@
  * against a test without reaching into individual modules.
  */
 
+import { pathToFileURL } from 'node:url';
+
 export { main, PARSER, PROGRAM, VERSION } from './main.js';
 export { EXIT, type ExitCode, type CliEnv, CliError, Lifecycle, parseLogLevel } from './commands.js';
 export {
@@ -38,3 +40,17 @@ export {
   type ReporterOptions,
   type TableOptions,
 } from './output.js';
+
+/**
+ * Direct execution.
+ *
+ * This file is a barrel, so `node dist/cli/index.js pair` exits 0 having done
+ * nothing at all — a silent no-op that reads exactly like success. It is also the
+ * wrong guess often enough to be worth catching, so running it directly hands off
+ * to the real entry rather than printing nothing. Importers are unaffected: this
+ * branch only fires when the file *is* the process entry.
+ */
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const { main } = await import('./main.js');
+  process.exitCode = (await main(process.argv.slice(2))) ?? 0;
+}

@@ -70,6 +70,16 @@ export interface WelcomeOptions {
   templates?: Partial<Record<WelcomeAction, string>>;
   /** Skip a participant seen in this group within the window. Default 5 min. */
   rejoinWindowMs?: number;
+  /**
+   * Decide and report every announcement, but send none.
+   *
+   * Mirrors `moderation`'s `dryRun`, and exists for the same reason: without it
+   * there is no way to exercise this plugin against a live socket without
+   * posting to a real group. Cooldown, collapse, rejoin suppression and the
+   * snapshot all still apply — only the `sendMessage` is skipped, and the
+   * `nyx.welcome` event still fires so the decision is observable.
+   */
+  dryRun?: boolean;
 }
 
 export interface WelcomeSnapshot {
@@ -107,6 +117,7 @@ export function welcome(options: WelcomeOptions = {}): Plugin {
   const cooldownMs = options.cooldownMs ?? DEFAULTS.cooldownMs;
   const maxPerEvent = options.maxPerEvent ?? DEFAULTS.maxPerEvent;
   const rejoinWindowMs = options.rejoinWindowMs ?? DEFAULTS.rejoinWindowMs;
+  const dryRun = options.dryRun === true;
   const inGroup = options.groups ?? (() => true);
 
   const events = {
@@ -199,8 +210,11 @@ export function welcome(options: WelcomeOptions = {}): Plugin {
           payload.mentionedJid = mentioned;
         }
         try {
-          await ctx.sock.sendMessage(groupId, payload as never);
-          ctx.sock.ev.emit('nyx.welcome' as never, { groupId, text, mentioned } as never);
+          // A dry run reports the decision and stays quiet in the group. Posting
+          // there is a network call and a visible side effect, so it is the only
+          // part skipped — cooldown, collapse and rejoin logic all still ran.
+          if (!dryRun) await ctx.sock.sendMessage(groupId, payload as never);
+          ctx.sock.ev.emit('nyx.welcome' as never, { groupId, text, mentioned, dryRun } as never);
         } catch (err) {
           // Failing to congratulate someone is not worth taking the bot down.
           log.warn('announce failed', { groupId, error: String(err) });

@@ -152,8 +152,13 @@ export interface ModerationOptions {
   strikes?: StrikeLadder;
   /** Compute and emit, but change nothing. */
   dryRun?: boolean;
-  /** Announce the action in the group. Default: never. */
+  /** Observe every emitted event. Default: nothing is observed. */
   announce?: (event: ModerationEvent, groupId: string) => Promise<void> | void;
+  /**
+   * Wording for the in-group post made once a strike reaches `announceAt`.
+   * Return an empty string to stay silent at that strike.
+   */
+  announceText?: (event: ModerationEvent) => string | undefined;
 }
 
 const INVITE = /(?:chat\.whatsapp\.com\/|wa\.me\/|whatsapp\.com\/invite\/)/i;
@@ -169,6 +174,33 @@ interface MemberState {
 }
 
 const key = (groupId: string, jid: string): string => `${groupId}|${jid}`;
+
+/** `15551234567@s.whatsapp.net` → `15551234567`. Null-safe: group-level events carry no member. */
+function localPart(jid: string | null): string {
+  return jid?.split('@')[0] ?? 'someone';
+}
+
+/** Rounded up, so a 90-second mute does not read as "0m". */
+function minutes(ms: number): string {
+  return `${Math.max(1, Math.round(ms / 60_000))}m`;
+}
+
+/**
+ * What the group is told, per outcome.
+ *
+ * The jid's local part stands in for a name because this plugin never resolves
+ * one — `pushName` is whatever the sender typed and can be a multi-kilobyte
+ * string of arbitrary content (see the module docs on names).
+ */
+const DEFAULT_ANNOUNCE: Record<ModerationKind, (event: ModerationEvent) => string> = {
+  delete: (e) => `Removed a message from ${localPart(e.jid)}.`,
+  mute: (e) => `Muted ${localPart(e.jid)} for ${minutes((e.mutedUntil ?? e.at) - e.at)}.`,
+  kick: (e) => `Removed ${localPart(e.jid)} — strike ${e.strikes}.`,
+  ban: (e) => `Banned ${localPart(e.jid)}.`,
+  word: (e) => `Removed a message from ${localPart(e.jid)}.`,
+  link: (e) => `Removed a link from ${localPart(e.jid)}.`,
+  flood: (e) => `Removed a message from ${localPart(e.jid)} — flooding.`,
+};
 
 /** Build a case-insensitive substring or pattern matcher from a WordRule value. */
 function matcher(pattern: WordRule['pattern']): (text: string) => boolean {
@@ -282,6 +314,21 @@ export function moderation(options: ModerationOptions = {}): Plugin {
       };
 
       /**
+       * Post the announcement into the group.
+       *
+       * The same `sendMessage` a delete uses, so the anti-spam queue and pacing
+       * apply here too. An announcement that bypassed the queue would be a way
+       * to talk at full speed.
+       */
+      const postToGroup = async (groupId: string, text: string): Promise<void> => {
+        try {
+          await ctx.sock.sendMessage(groupId, { text });
+        } catch (err) {
+          log.warn('announcement failed', { groupId, error: String(err) });
+        }
+      };
+
+      /**
        * Add a strike and run the ladder. Returns the event so the caller can
        * report it, and so tests can assert on one object rather than three.
        */
@@ -328,6 +375,18 @@ export function moderation(options: ModerationOptions = {}): Plugin {
         } else if (n >= ladder.kickAt) {
           await remove(groupId, jid, false);
           event.kind = 'kick';
+        }
+
+        // `announceAt` posts into the group; `announce` only observes. Both exist
+        // because they answer different questions — "tell me what happened" is
+        // not "tell the group what happened". Same `>=` shape as every other rung,
+        // so it fires on each strike from that point up, not once on crossing.
+        //
+        // A dry run stays quiet in the group: posting there is a network call and
+        // a visible side effect. The event still reports the decision.
+        if (n >= ladder.announceAt && !dryRun) {
+          const text = options.announceText?.(event) ?? DEFAULT_ANNOUNCE[event.kind](event);
+          if (text) await postToGroup(groupId, text);
         }
 
         log.info('action', { groupId, jid, kind: event.kind, strikes: n, reason });

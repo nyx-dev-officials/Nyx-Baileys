@@ -62,24 +62,78 @@ test('every argument reaches the underlying send untouched', async () => {
   assert.equal(sock.sent[0].extra, extra);
 });
 
-test('relayMessage is gated as well as sendMessage', async () => {
-  const { sock } = rig();
+test('relayMessage is left alone — anti-spam only paces sendMessage', async () => {
+  const { sock, pristine } = rig({ minGapMs: 60, maxPerMinute: 1000 });
 
-  await Promise.all([
-    sock.sendMessage(CHAT, { text: 'a' }),
-    sock.relayMessage(CHAT, 'MSGID1'),
-    sock.relayMessage(CHAT, 'MSGID2'),
-  ]);
+  assert.equal(sock.relayMessage, pristine.relayMessage, 'relayMessage must not be wrapped');
 
+  // A relay must not wait out the queue gap the way a paced send does.
+  const queued = sock.sendMessage(CHAT, { text: 'paced' });
+  const before = Date.now();
+  await sock.relayMessage(CHAT, 'MSGID1');
+  const elapsed = Date.now() - before;
+  await queued;
+
+  assert.ok(elapsed < 30, `a relay should go straight out, took ${elapsed}ms`);
   assert.deepEqual(
     sock.sent.map((m) => m.via),
-    ['sendMessage', 'relayMessage', 'relayMessage'],
-    'both methods go through one queue, in submission order',
+    ['relayMessage', 'sendMessage'],
+    'the relay is not queued behind the paced send',
   );
-  assert.deepEqual(sock.sent.filter((m) => m.via === 'relayMessage').map((m) => m.messageId), [
-    'MSGID1',
-    'MSGID2',
+});
+
+/* ── non-message actions ─────────────────────────────────────────────── */
+
+test('reactions, edits, deletes, pins and protocol actions skip the queue', async () => {
+  const { sock } = rig({ minGapMs: 60, maxPerMinute: 1000 });
+
+  const before = Date.now();
+  await Promise.all([
+    sock.sendMessage(CHAT, { react: { text: '👍', key: {} } }),
+    sock.sendMessage(CHAT, { edit: {}, text: 'fixed' }),
+    sock.sendMessage(CHAT, { delete: {} }),
+    sock.sendMessage(CHAT, { pin: {} }),
+    sock.sendMessage(CHAT, { disappearingMessagesInChat: true }),
+    sock.sendMessage(CHAT, { sharePhoneNumber: true }),
+    sock.sendMessage(CHAT, { limitSharing: true }),
   ]);
+  const elapsed = Date.now() - before;
+
+  assert.equal(sock.sent.length, 7, 'every action still reached the socket');
+  assert.ok(elapsed < 30, `an action must not wait out a gap, took ${elapsed}ms`);
+});
+
+test('a nullish action key does not bypass — the content is still a paced send', async () => {
+  const { sock } = rig({ minGapMs: 0, maxPerMinute: 1 });
+
+  // `react` is present but undefined. Upstream's own non-nullish rule says this
+  // is a text send, so it must be paced and counted like one.
+  await sock.sendMessage(CHAT, { text: 'first', react: undefined });
+  await assert.rejects(sock.sendMessage(CHAT, { text: 'second' }), /burst ceiling 1\/min/);
+});
+
+test('bypassed actions do not consume the send ceiling', async () => {
+  const { sock } = rig({ minGapMs: 0, maxPerMinute: 1 });
+
+  await sock.sendMessage(CHAT, { react: { text: '👍', key: {} } });
+  await sock.sendMessage(CHAT, { delete: {} });
+
+  // The window still holds room for exactly one real message.
+  await sock.sendMessage(CHAT, { text: 'first' });
+  await assert.rejects(sock.sendMessage(CHAT, { text: 'second' }), /burst ceiling 1\/min/);
+});
+
+test('polls, events and plain text are messages — still paced and counted', async () => {
+  const { sock } = rig({ minGapMs: 0, maxPerMinute: 2 });
+
+  await sock.sendMessage(CHAT, { text: 'hello' });
+  await sock.sendMessage(CHAT, { event: { name: 'standup' } });
+
+  await assert.rejects(
+    sock.sendMessage(CHAT, { poll: { name: 'lunch?', values: ['yes', 'no'] } }),
+    /burst ceiling 2\/min/,
+    'a poll is a message and must still be counted',
+  );
 });
 
 /* ── maxQueue ────────────────────────────────────────────────────────── */
@@ -272,41 +326,28 @@ test('dispose() restores sendMessage and sends bypass the queue', async () => {
   assert.ok(elapsed < 15, `an unpatched socket must send immediately, took ${elapsed}ms`);
 });
 
-/*
- * ---------------------------------------------------------------------------
- * KNOWN BUG — src/core/intercept.ts:57-68, reached through antiSpam.
- *
- * `antiSpam` registers a disposer for *both* gates it creates
- * (`ctx.onDispose(() => handle.undo())`, src/plugins/antiSpam.ts:109-113), so
- * teardown is supposed to give `relayMessage` back intact. Because the pristine
- * stash in `patch()` only records the first method patched on an object,
- * `relayMessage` — gated second — is restored as `undefined`, i.e. destroyed.
- *
- * `sessionRepair` gates the same pair in the same order and fails identically.
- * See also tests/intercept.test.js.
- * ---------------------------------------------------------------------------
- */
-test('BUG: dispose() restores relayMessage, not undefined', async () => {
+test('teardown restores sendMessage and leaves relayMessage alone', async () => {
   const { sock, pristine, dispose } = rig();
 
-  assert.notEqual(sock.relayMessage, pristine.relayMessage, 'sanity: it was patched');
-  // The gate is asynchronous — awaiting is required, or `.key` is read off a
-  // pending promise.
+  assert.notEqual(sock.sendMessage, pristine.sendMessage, 'sanity: sendMessage was patched');
+  assert.equal(sock.relayMessage, pristine.relayMessage, 'sanity: relayMessage was never patched');
+
   const relayed = await sock.relayMessage(CHAT, 'M1');
-  assert.equal(relayed.key.id, 'RELAY-1', 'sanity: the gate forwards');
+  assert.equal(relayed.key.id, 'RELAY-1', 'relayMessage still works');
 
   dispose();
 
-  assert.equal(sock.relayMessage, pristine.relayMessage, 'relayMessage was left undefined');
+  assert.equal(sock.sendMessage, pristine.sendMessage, 'the pristine send function is back');
+  assert.equal(sock.relayMessage, pristine.relayMessage);
   assert.equal(typeof sock.relayMessage, 'function');
 });
 
-test('the plugin survives a socket that is missing a method it gates', () => {
+test('a socket missing sendMessage is reported, not silently left unpaced', () => {
   const bare = {
     ev: fakeEvMinimal(),
-    sendMessage(jid, content) {
-      bare.calls.push({ jid, content });
-      return { key: { id: 'S1', remoteJid: jid } };
+    relayMessage(jid, messageId) {
+      bare.calls.push({ jid, messageId });
+      return { key: { id: 'R1', remoteJid: jid } };
     },
     calls: [],
   };
@@ -315,17 +356,9 @@ test('the plugin survives a socket that is missing a method it gates', () => {
 
   assert.ok(
     harness.log.has('method missing'),
-    'the missing relayMessage should be reported, not silently ignored',
+    'a missing sendMessage should be reported, not silently ignored',
   );
-  assert.ok(
-    !harness.log.has('sendMessage'),
-    'the method that does exist must not be reported missing',
-  );
-
-  return Promise.resolve(bare.sendMessage(CHAT, { text: 'still works' })).then(() => {
-    assert.equal(bare.calls.length, 1, 'the surviving method is still routed through the queue');
-    assert.doesNotThrow(() => harness.dispose());
-  });
+  assert.doesNotThrow(() => harness.dispose());
 });
 
 /** Minimal emitter — `fakeSocket()` would add methods we are asserting are absent. */

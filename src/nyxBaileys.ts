@@ -44,6 +44,8 @@ export class NyxBaileys {
 
   #disposables = new Disposables();
   #connecting: Promise<CoreSocket> | null = null;
+  /** Tail of the serialised creds-save chain. `dispose()` awaits it. */
+  #pendingSave: Promise<void> = Promise.resolve();
   #closed = false;
   #lastConnection: { at: number; state: string } = { at: 0, state: 'never' };
 
@@ -107,10 +109,25 @@ export class NyxBaileys {
     const { state, saveCreds } = await store.init();
     await resolveWebVersion().catch(() => undefined);
 
+    // Creds are persisted by an async `writeFile` that truncates before it
+    // writes, so two things go wrong if this is left alone. Concurrent saves can
+    // interleave and leave malformed JSON, and a process that exits with a save
+    // in flight leaves `creds.json` at **0 bytes** — a destroyed session, with no
+    // error anywhere. Both were observed on 2026-10-04.
+    //
+    // Chaining serialises the writes and gives `dispose()` a promise to await,
+    // so a clean shutdown cannot truncate the file it is trying to save.
+    let pending: Promise<void> = Promise.resolve();
+    const saveCredsSerialised = (): Promise<void> => {
+      pending = pending.then(() => saveCreds()).catch(() => undefined);
+      return pending;
+    };
+    this.#pendingSave = pending;
+
     const tuning = this.#tuning();
     const sock = await createCoreSocket({
       state,
-      saveCreds,
+      saveCreds: saveCredsSerialised,
       options: this.options,
       tuning,
       log: this.log.child('socket'),
@@ -125,7 +142,7 @@ export class NyxBaileys {
     });
 
     this.sock = sock;
-    await this.decorate({ sock, state, saveCreds });
+    await this.decorate({ sock, state, saveCreds: saveCredsSerialised });
     this.#wireConnection(sock);
 
     return sock;
@@ -288,6 +305,9 @@ export class NyxBaileys {
     }
     this.#disposables.dispose();
     this.applied.length = 0;
+    // Ending the socket flushes a final `creds.update`. Wait for that write to
+    // land before returning, or the caller exits mid-save and truncates the file.
+    await this.#pendingSave.catch(() => undefined);
     this.log.debug('disposed');
   }
 

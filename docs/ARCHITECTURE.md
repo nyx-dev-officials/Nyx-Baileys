@@ -123,11 +123,12 @@ patch b, then a  →  stash keys ["b"]   →  undo() leaves  a: undefined, b: fu
 ```
 
 The wrappers work. Only the teardown is wrong, and it fails quietly. This is
-reproducible in the real chain — `session-repair` and `anti-spam` each patch
-`sendMessage` and `relayMessage`, so on `NyxBaileys.dispose()` the second of
-those two methods is set to `undefined` rather than restored. It is latent rather
-than user-visible today only because a disposed socket is discarded anyway, but
-`patchAll`'s aggregate undo is affected on any object:
+reproducible in the real chain — `session-repair` patches `sendMessage` and
+`relayMessage`, so on `NyxBaileys.dispose()` the second of those two methods is
+set to `undefined` rather than restored. (`anti-spam` used to gate the same pair;
+it was narrowed to `sendMessage` alone, so it no longer reaches this path.) It is
+latent rather than user-visible today only because a disposed socket is discarded
+anyway, but `patchAll`'s aggregate undo is affected on any object:
 
 ```
 patchAll(t, {a, b})  →  returns 2 handles, first is an aggregate

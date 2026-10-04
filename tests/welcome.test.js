@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 
 import { welcome } from '../dist/plugins/welcome.js';
 
-import { GROUP, applyPlugin, fakeSocket, pn } from './helpers.js';
+import { GROUP, applyPlugin, fakeSocket, flush, pn } from './helpers.js';
 
 const OTHER = '999@g.us';
 
@@ -235,4 +235,85 @@ test('reset clears the counters', () => {
   join([pn(1)]);
   sock.__welcome.reset();
   assert.equal(snapshot().sent, 0);
+});
+/* ── dry run ─────────────────────────────────────────────────────────── */
+
+/**
+ * `dryRun` exists because this plugin had no way to be exercised against a live
+ * socket without posting to a real group. That is not hypothetical: the first
+ * version of `nyx-baileys selftest` emitted a synthetic join into a live socket,
+ * and the plugin tried to send to a group id that does not exist. The send failed
+ * so nothing reached WhatsApp, but an attempted send is exactly what the command
+ * promises not to do.
+ *
+ * These pin the contract: every decision still happens and is still reported, and
+ * the only thing skipped is the network call.
+ */
+test('a dry run reports the announcement and sends nothing', async () => {
+  const sock = fakeSocket();
+  applyPlugin(welcome({ cooldownMs: 0, rejoinWindowMs: 0, dryRun: true }), sock);
+
+  const events = [];
+  sock.ev.on('nyx.welcome', (e) => events.push(e));
+
+  sock.ev.emit('group-participants.update', {
+    id: GROUP,
+    participants: [{ id: pn(1) }],
+    action: 'add',
+  });
+  await flush();
+
+  assert.equal(sock.sent.length, 0, 'nothing was sent into the group');
+  assert.equal(events.length, 1, 'but the decision was still reported');
+  assert.equal(events[0].dryRun, true);
+  assert.match(events[0].text, /Welcome to the group/);
+});
+
+test('a dry run still counts the announcement in the snapshot', async () => {
+  const sock = fakeSocket();
+  applyPlugin(welcome({ cooldownMs: 0, rejoinWindowMs: 0, dryRun: true }), sock);
+
+  sock.ev.emit('group-participants.update', {
+    id: GROUP,
+    participants: [{ id: pn(1) }],
+    action: 'add',
+  });
+  await flush();
+
+  // The snapshot is what an operator watches to confirm the plugin is deciding
+  // correctly, so a dry run that reported nothing would be useless — the same
+  // reasoning as moderation's dry run recording state before the check.
+  assert.equal(sock.__welcome.snapshot().sent, 1);
+});
+
+test('a dry run still applies cooldown and rejoin suppression', async () => {
+  const sock = fakeSocket();
+  applyPlugin(welcome({ cooldownMs: 0, rejoinWindowMs: 60_000, dryRun: true }), sock);
+
+  const join = (id) =>
+    sock.ev.emit('group-participants.update', { id: GROUP, participants: [{ id }], action: 'add' });
+
+  join(pn(1));
+  await flush();
+  join(pn(1));
+  await flush();
+
+  const snap = sock.__welcome.snapshot();
+  assert.equal(snap.sent, 1, 'the repeat was suppressed, not announced twice');
+  assert.equal(snap.skipped, 1);
+});
+
+test('without dryRun the message really is sent', async () => {
+  const sock = fakeSocket();
+  applyPlugin(welcome({ cooldownMs: 0, rejoinWindowMs: 0 }), sock);
+
+  sock.ev.emit('group-participants.update', {
+    id: GROUP,
+    participants: [{ id: pn(1) }],
+    action: 'add',
+  });
+  await flush();
+
+  assert.equal(sock.sent.length, 1, 'the default path is unchanged');
+  assert.equal(sock.sent[0].jid, GROUP);
 });
