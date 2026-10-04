@@ -1,0 +1,41 @@
+# Normalise line endings and mark every text file as text.
+#
+# Without this, Git guesses per file and the guess is wrong often enough to
+# matter: on Windows, files get committed with CRLF, and any tool that reads the
+# repository as a stream — a model, a linter, `curl`, another OS — can see the
+# carriage returns as content rather than as line breaks.
+#
+# `text=auto` lets Git detect, then fixes. The `*.ts text` style rules force it
+# for the file types that must never be guessed wrong, so adding a new .ts file
+# cannot silently inherit CRLF.
+
+* text=auto
+
+*.ts      text eol=lf
+*.js      text eol=lf
+*.mjs     text eol=lf
+*.cjs     text eol=lf
+*.json    text eol=lf
+*.md      text eol=lf
+*.yml     text eol=lf
+*.yaml    text eol=lf
+*.css     text eol=lf
+*.html    text eol=lf
+*.txt     text eol=lf
+
+# Shell scripts must stay LF or shebangs break.
+*.sh      text eol=lf
+
+# Binary assets: never diff, never mangle.
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.webp    binary
+*.woff    binary
+*.woff2   binary
+*.ttf     binary
+*.pdf     binary
+*.zip     binary
+*.gz      binary
