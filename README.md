@@ -147,6 +147,32 @@ socket exists, all of them pure:
 | `ConversationStore` | per-user state with a TTL and a hard size ceiling |
 | `parseIncoming` | text, mentions, quoted reply and command/argument parsing |
 
+### Group moderation
+
+```ts
+import { moderation, welcome } from 'nyx-baileys/plugins';
+
+client
+  .registerPlugin(moderation({
+    words: [{ pattern: ['free crypto', /wa\.me\/[a-z0-9]+/i] }],
+    links: { blockInvite: true, allowDomains: ['example.com'] },
+    flood: { max: 6, windowMs: 8_000 },
+    // The ladder is data: delete → mute → kick → ban, and `Infinity` means
+    // “never”, so a stage you did not configure is genuinely off.
+    strikes: { deleteAt: 1, muteAt: 3, kickAt: 5, banAt: 8, decayMs: 86_400_000 },
+    exempt: (jid) => owners.has(jid),
+    isAdmin: (jid) => admins.has(jid),
+  }))
+  .registerPlugin(welcome({ templates: { add: 'Welcome, {name}.' } }));
+```
+
+`moderation` emits `nyx.moderation` for every decision and does nothing else.
+`dryRun: true` reports without acting, which is how you tune a ladder against a
+real group. Two honest limits: WhatsApp has **no server-side per-member mute**, so
+`isMuted()` is an advisory flag your own command handler gates on, and
+exemptions are checked on the action path too — a mod bot that removes the human
+running it is the outage this design exists to prevent.
+
 ## Project layout
 
 ```
@@ -156,7 +182,7 @@ src/
   nyxBaileys.ts    the wrapper class: lifecycle, plugin chain, rebuild
   core/              socket · intercept · nodes · media · session-store ·
                      clock · delivery · retry · errors · jid · album
-  plugins/           13 default plugins + 10 opt-in feature plugins
+  plugins/           13 default plugins + 12 opt-in feature plugins
   antiban/           opt-in anti-ban engines — see docs/ANTIBAN.md
   integrations/      keyless HTTP integrations + Indonesian localisation
   utils/             types · compose · logger · text · format · random ·

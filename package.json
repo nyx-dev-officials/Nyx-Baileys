@@ -17,6 +17,7 @@
     "./lite/*": "./dist/*.js",
     "./package.json": "./package.json",
     "./core/*": "./dist/core/*.js",
+    "./plugins": "./dist/plugins/index.js",
     "./plugins/*": "./dist/plugins/*.js",
     "./utils/*": "./dist/utils/*.js",
     "./adapters": "./dist/adapters/index.js",

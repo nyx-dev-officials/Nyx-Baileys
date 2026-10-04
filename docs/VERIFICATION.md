@@ -595,6 +595,76 @@ it:
   against fakes. Real WhatsApp semantics are unverified.
 - The ~26 MB root import is upstream protobufjs and libsignal. It cannot be
   trimmed while the root re-exports `* from '@whiskeysockets/baileys'`; only the
-  `lite` entry avoids it. A `nyx-baileys/plugins` entry — engine but not
-  adapters/multi/security/integrations — is the next structural lever.
+  `lite` entry avoids it. The `nyx-baileys/plugins` entry added in section 7
+  saves a few MB but **does not** avoid the engine — see that section's
+  measurement before treating it as a cost lever.
 - Bench absolute values drift ~2x on a shared machine; only the ratio is stable.
+
+---
+
+## 7. Group moderation and welcome — 2026-10-04
+
+Driven by the engine compendium, used as the extension spec rather than as a
+description to reproduce. The gap it made obvious: everything above observes
+and paces, and nothing *acted* on a group member. `groupGuard` flags a mass
+add; `antiSpam` paces what the bot sends; neither can remove anyone.
+
+### What was added
+
+| Module | Surface |
+|---|---|
+| [src/plugins/moderation.ts](../src/plugins/moderation.ts) | word / link / flood rules, a configurable strike ladder, delete · mute · kick · ban, dry run, `nyx.moderation` |
+| [src/plugins/welcome.ts](../src/plugins/welcome.ts) | join · leave · promote · demote announcements with per-event collapsing, cooldown and rejoin suppression |
+
+Both are opt-in, wired into `featurePlugins()` at orders 145 and 146, and
+re-exported from the root and from `nyx-baileys/plugins` (a new subpath entry).
+
+### Verification
+
+| Check | Command | Result |
+|---|---|---|
+| Typecheck | `npm run check` | 0 errors |
+| Build | `npm run build` | 0 errors |
+| Full suite | `npm test` | **587 / 587 pass, 0 fail** (was 538; +49) |
+| Export surface | every `exports` target exists; `moderation`/`welcome` resolve from root and barrel | 0 missing |
+
+### Five defects the new tests found
+
+1. **A mute that stopped evaluation was a permanent ceiling.** The first
+   implementation returned early on a muted member, so `muteAt` silently
+   capped the ladder — `kickAt` and `banAt` above it were unreachable. Mute is
+   now advisory: the plugin keeps escalating and the host gates on
+   `isMuted()`. A mute is a step, not a wall.
+2. **The flood rule reset its own window on trigger**, which capped a flooder at
+   one strike per burst — they had to trip the rule N separate times to climb.
+   Each message over the ceiling is now its own offence.
+3. **Ban stacked with kick.** Two independent `if`s meant one offence produced
+   two `groupParticipantsUpdate` calls; the second targets an already-gone
+   member. Ban now supersedes kick, and a member already removed is not removed
+   twice.
+4. **Dry run recorded nothing.** `remove()` returned before setting `banned`, so
+   a dry run could not tell you who it *would* have banned — which is the only
+   reason to run one. State is now recorded before the dry-run check; only the
+   network call is skipped.
+5. **Exemption emitted an event per exempt message**, drowning the events you
+   actually want. Exemption is now silent.
+
+Two of these (`1`, `2`) would not have surfaced without tests that exercise the
+*escalation* rather than the first offence, which is why the suite walks the
+ladder at several threshold settings instead of only at the defaults.
+
+### The `/plugins` entry is not a cost lever
+
+Measured cold, one process each, RSS, warm filesystem cache:
+
+| Specifier | ms | RSS | exports |
+|---|---|---|---|
+| `@whiskeysockets/baileys` | 429 | 84.7 MB | 263 |
+| `nyx-baileys/plugins` | 450 | 86.3 MB | 15 |
+| `nyx-baileys` (root) | 587 | 90.6 MB | 602 |
+
+`./plugins` saves ~140 ms and ~4 MB against the root, because it skips the
+framework's own barrel — **not** because it avoids the engine. `plugins/mentions.ts`
+imports `proto` from upstream at runtime, so the protobuf stack loads either
+way. Only `lite` avoids it. Absolute values drift ~2x on this machine between
+runs; the ordering and the ratio are what these numbers support.

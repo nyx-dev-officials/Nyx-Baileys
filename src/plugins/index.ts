@@ -22,6 +22,7 @@
 import { callLog } from './call-log.js';
 import { commands } from './commands.js';
 import { metrics } from './metrics.js';
+import { moderation } from './moderation.js';
 import { newsletters } from './newsletter.js';
 import { polls } from './poll.js';
 import { presence } from './presence.js';
@@ -29,6 +30,7 @@ import { reactions } from './reaction.js';
 import { readReceipts } from './read-receipts.js';
 import { statusFeed } from './status.js';
 import { webhooks } from './webhook.js';
+import { welcome } from './welcome.js';
 
 import type { Plugin } from '../utils/types.js';
 
@@ -43,6 +45,27 @@ export { callLog } from './call-log.js';
 export { commands, tokenize } from './commands.js';
 export { webhooks } from './webhook.js';
 export { metrics } from './metrics.js';
+
+/* moderation */
+export { moderation } from './moderation.js';
+export type {
+  ModerationEvent,
+  ModerationKind,
+  ModerationOptions,
+  StrikeLadder,
+  FloodRule,
+  LinkRule,
+  WordRule,
+} from './moderation.js';
+
+/* welcome */
+export { welcome } from './welcome.js';
+export type {
+  WelcomeOptions,
+  WelcomeSnapshot,
+  WelcomeAction,
+  MentionMode,
+} from './welcome.js';
 
 /* poll */
 export type { PollState, PollOption, PollResult, PollsOptions, CreatePollOptions } from './poll.js';
@@ -112,6 +135,8 @@ export function featurePlugins(): Plugin[] {
     statusFeed(),   // 130
     newsletters(),  // 135
     callLog(),      // 140
+    moderation(),   // 145
+    welcome(),      // 146
     presence(),     // 150
     readReceipts(), // 160
     commands(),     // 170
