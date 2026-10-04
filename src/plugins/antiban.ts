@@ -207,7 +207,15 @@ export function readReceiptVariancePlugin(options: ReadReceiptVarianceOptions = 
               reject(err);
             }
           }, jitter.delayMs());
-          timer.unref?.();
+          // Not unref'd, and deliberately so. This timer gates a promise the
+          // caller is awaiting, so it is often the only thing holding the event
+          // loop open. Unref'd, Node concludes the loop is empty and exits before
+          // it fires: the promise never settles, `readMessages` silently never
+          // runs, and on a bare runner the remaining tests in the file are
+          // reported `cancelledByParent`. Same rule as `utils/queue.ts` and
+          // `plugins/album.ts` — a timer that resolves an awaited promise is real
+          // work. Background *schedules* (see `humanEntropy`) are the opposite
+          // case and do stay unref'd, so they cannot hold a process open.
           pending.add(timer);
         });
       }) as never);

@@ -166,12 +166,25 @@ export function albumHandler(): Plugin {
       };
 
       /** Wait for an album to fill up, then return it. */
+      /**
+       * Wait for an album to complete, or for the timeout to elapse.
+       *
+       * The timer is deliberately NOT unref'd. This promise is awaited by
+       * callers, so the timer is frequently the only thing holding the event loop
+       * open — and an unref'd timer lets Node conclude the loop is empty and exit,
+       * at which point the promise never settles and the caller's `await` never
+       * returns. It presents as the process exiting silently mid-call, which is
+       * exactly what happened on CI: the album suite's remaining tests were
+       * reported `cancelledByParent` on a bare Linux runner, because the runner had
+       * no other handles. The same shape was fixed in `utils/queue.ts` and again
+       * in `antiban.ts`; the rule is that a timer which resolves an awaited
+       * promise is real work and must hold the loop.
+       */
       const waitFor = (key: string, timeoutMs = 15_000): Promise<Album | undefined> =>
         new Promise((resolve) => {
           const existing = albums.get(key);
           if (existing?.completedAt) return resolve(existing);
           const timer = setTimeout(() => resolve(albums.get(key)), timeoutMs);
-          timer.unref?.();
           const handler = (album: Album): void => {
             if (album.key === key && album.completedAt) {
               clearTimeout(timer);
