@@ -21,6 +21,7 @@
 
 import { callLog } from './call-log.js';
 import { commands } from './commands.js';
+import { interactive } from './interactive.js';
 import { metrics } from './metrics.js';
 import { moderation } from './moderation.js';
 import { newsletters } from './newsletter.js';
@@ -44,6 +45,7 @@ export { newsletters } from './newsletter.js';
 export { callLog } from './call-log.js';
 export { commands, tokenize } from './commands.js';
 export { webhooks } from './webhook.js';
+export { interactive } from './interactive.js';
 export { metrics } from './metrics.js';
 
 /* moderation */
@@ -135,6 +137,7 @@ export function featurePlugins(): Plugin[] {
     statusFeed(),   // 130
     newsletters(),  // 135
     callLog(),      // 140
+    interactive(), // 118
     moderation(),   // 145
     welcome(),      // 146
     presence(),     // 150

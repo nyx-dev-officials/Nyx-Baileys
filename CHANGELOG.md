@@ -53,6 +53,14 @@ at all — `tests/args.test.js` covers the command *plugin*'s parser, not
 
 ### Added
 
+- `interactive` — sends the message types rc14 refuses. `listMessage`,
+  `buttonsMessage`, `templateMessage`, `interactiveMessage` and the carousel,
+  collection, product and contact variants now go out instead of throwing
+  `Invalid media type`. It patches `sendMessage`, builds the message with
+  `generateWAMessageFromContent`, relays it with the options `sendMessage` itself
+  would pass, and emits the local-history update so the sender sees the message
+  afterwards. Content the upstream chain already understands is passed straight
+  through untouched. Opt-in, like the other feature plugins.
 - `moderation` and `welcome` — group enforcement. Word, link and flood rules into
   a configurable strike ladder (delete · mute · kick · ban), and join/leave/
   promote/demote announcements with cooldown, per-event collapsing and rejoin
@@ -76,24 +84,25 @@ at all — `tests/args.test.js` covers the command *plugin*'s parser, not
 
 ### Known limitations
 
-- **rc14 cannot send interactive messages.** `generateWAMessageContent` is an
-  if/else chain over the content keys it knows and its final `else` throws
+- **rc14 cannot send interactive messages *natively*,** and the `interactive`
+  plugin works around it rather than fixing upstream. `generateWAMessageContent`
+  is an if/else chain over the content keys it knows and its final `else` throws
   `Invalid media type`, so `listMessage`, `buttonsMessage`, `templateMessage` and
-  `interactiveMessage` cannot be sent at all. Building the message by hand and
-  handing it to `relayMessage` returns a plausible message ID and delivers
-  nothing — verified on a physical phone, with and without the group-metadata
-  cache. The builders serialise correctly; only delivery is missing.
-- Template and native-flow messages are **WhatsApp Business** surfaces. Consumer
-  WhatsApp will not render them even once sending works.
+  `interactiveMessage` are rejected by `sendMessage` itself. The builders in
+  `core/nodes.ts` always serialised them correctly; only delivery was missing.
+- **Template and native-flow messages remain WhatsApp Business surfaces.**
+  `interactive` fixes delivery, not client support — consumer WhatsApp will not
+  render them even once they arrive. `listMessage` and `buttonsMessage` are
+  consumer-supported and render everywhere.
 - Newsletter, and `stealth` / `metrics` / `webhooks` / `call-log` /
   `read-receipts` / `send-presence` / `anti-delete`, are unit-tested but have
   never been run against live WhatsApp.
 
 ### Tests
 
-538 → **662**, 39 suites. Seven previously untested plugins now have coverage, and
-a flaky `JsonStore` autosave test was made deterministic rather than merely
-re-run.
+538 → **676**, 40 suites. Seven previously untested plugins now have coverage, a
+flaky `JsonStore` autosave test was made deterministic rather than merely
+re-run, and the `interactive` plugin ships with 14 tests of its own.
 
 ## [0.1.0]
 

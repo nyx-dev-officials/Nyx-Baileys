@@ -222,7 +222,7 @@ src/
   security/          validate · redact · permissions · acl · audit
   cli/               args · output
 bot/               command loader + createNyxBot host for bot scripts
-tests/               39 node:test suites, 662 tests
+tests/               40 node:test suites, 676 tests
 docs/                this file, ARCHITECTURE, PLUGIN-API, FEATURES,
                      DESIGN-NOTES, VERIFICATION, REF-FINDINGS, ANTIBAN
 ```
@@ -264,7 +264,7 @@ pass. Status is `VERIFICATION.md`'s, updated where a fix changed it.
 | # | Capability | Status | Where |
 |---|---|---|---|
 | 1 | Upstream protocol engine | covered | `core/socket.ts:83` |
-| 2 | Native flow / interactive layouts | **serialises, cannot send** | `core/nodes.ts:61`, `:90`, `:151` — rc14 rejects `interactiveMessage`; see [Buttons](./docs/HOW-IT-WORKS.md#buttons-and-interactive-layouts) |
+| 2 | Native flow / interactive layouts | covered by `interactive` | `core/nodes.ts:61`, `:90`, `:151`; `plugins/interactive.ts` — rc14 rejects these natively, the plugin works around it |
 | 3 | Album container (receive) | covered | `plugins/album.ts:62`, `:90` — was broken by D1 |
 | 4 | Anti-spam jitter queue | covered | `plugins/antiSpam.ts:46`, `:66` |
 | 5 | Identity and presence | covered | `plugins/stealth.ts:37`, `:53` |
@@ -305,7 +305,7 @@ text was silently dropped on the wire. Every fix has a regression test in
 
 The verify chain is green as of 2026-10-03: `npm run check` and `npm run build`
 exit 0 under `strict` + `noUncheckedIndexedAccess`, and `npm test` reports
-**662 tests, 662 pass, 0 fail** in ~5s.
+**676 tests, 676 pass, 0 fail** in ~5s.
 
 The suite covers the primitives that everything else depends on — interception
 chaining and unwind, native-flow serialisation, album linkage, the jitter queue,

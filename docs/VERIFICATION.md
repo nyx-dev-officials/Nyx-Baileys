@@ -676,7 +676,7 @@ runs; the ordering and the ratio are what these numbers support.
 The CLI had **no tests at all**. `tests/args.test.js` covers
 `dist/utils/args.js` (the command *plugin*'s parser), not `dist/cli/`. Five of the
 six defects below sat in `src/cli/`, untested, and shipped. The suite is now
-**662 / 662** (was 587; +75, every one offline).
+**676 / 676** (was 587; +89, every one offline).
 
 ### Six defects
 
