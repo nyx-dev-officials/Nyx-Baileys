@@ -125,6 +125,17 @@ export interface InteractiveOptions {
    * `single_select` is **unverified** on consumer clients — see the file header.
    */
   flowName?: NativeFlowName;
+  /**
+   * What to do with a `listMessage`.
+   *
+   * `'text'` (default) renders the sections as a numbered plaintext menu and
+   * sends that instead. `'off'` sends the native flow anyway, which a consumer
+   * account will silently drop. `'throw'` refuses the send outright.
+   *
+   * Text is the default because the alternative is a message that reports
+   * success and never arrives. The conversion is logged, never silent.
+   */
+  listFallback?: 'text' | 'off' | 'throw';
 }
 
 export interface InteractiveStats {
@@ -134,6 +145,8 @@ export interface InteractiveStats {
   readonly passedThrough: number;
   /** Handled sends that failed. */
   readonly failed: number;
+  /** listMessage sends rendered as a numbered plaintext menu. */
+  readonly fallback: number;
 }
 
 /** The first interactive key in `content`, or `null`. */
@@ -298,9 +311,48 @@ export function toInteractiveInner(
   return payload;
 }
 
+/**
+ * Render a sectioned menu as a numbered plaintext message.
+ *
+ * `single_select` is dropped by the server on consumer accounts, so the useful
+ * question is not "how do I make the list render" but "what is the best thing to
+ * send instead". A numbered list preserves both the grouping and the reply
+ * affordance, and it survives being read by any client.
+ *
+ * WhatsApp's own dialect: `*bold*` for headings, and the box drawing is plain
+ * text so it needs no monospace to stay aligned. Rows are numbered across the
+ * whole menu, not per section, so "reply 3" is unambiguous.
+ */
+export function formatListAsText(payload: Record<string, unknown>): string {
+  const title = String(payload.title ?? 'Menu');
+  const description = String(payload.description ?? '');
+  const footer = typeof payload.footerText === 'string' ? payload.footerText : '';
+  const sections = Array.isArray(payload.sections) ? (payload.sections as Array<Record<string, unknown>>) : [];
+
+  const lines: string[] = [`*┌── [ ${title.toUpperCase()} ]*`];
+  if (description) lines.push(`│ ${description}`);
+
+  let n = 0;
+  for (const section of sections) {
+    if (section.title) lines.push(`├─ *${String(section.title).toUpperCase()}*`);
+    const rows = Array.isArray(section.rows) ? (section.rows as Array<Record<string, unknown>>) : [];
+    for (const row of rows) {
+      n += 1;
+      lines.push(`│  [${n}] *${String(row.title ?? '')}*`);
+      if (row.description) lines.push(`│      └─ ${String(row.description)}`);
+    }
+    lines.push('│');
+  }
+
+  if (n === 0) lines.push('│  (no options)');
+  if (footer) lines.push(`│ ${footer}`);
+  lines.push('*└── Reply with a number to select*');
+  return lines.join('\n');
+}
+
 export function interactive(options: InteractiveOptions = {}): Plugin {
   const useCachedGroupMetadata = options.useCachedGroupMetadata === true;
-  const counters = { sent: 0, passedThrough: 0, failed: 0 };
+  const counters = { sent: 0, passedThrough: 0, failed: 0, fallback: 0 };
 
   return {
     name: 'interactive',
@@ -331,6 +383,28 @@ export function interactive(options: InteractiveOptions = {}): Plugin {
 
           const { [key]: payload, ...rest } = content as Record<string, unknown>;
           const flowName = interactiveFlowName(key, options);
+
+          // A sectioned menu cannot leave a consumer account, so do not send one.
+          // The alternative is a send that resolves and never arrives.
+          if (key === 'listMessage' && options.listFallback !== 'off') {
+            const mode = options.listFallback;
+            const menu = payload as Record<string, unknown>;
+            // Async even though nothing awaits: the rest of this wrapper always
+            // returns a promise, and a synchronous throw here would bypass a
+            // caller's `.catch()` and look like a different failure entirely.
+            return (async () => {
+              if (mode === 'throw') {
+                throw new Error(
+                  'listMessage is dropped by the server on consumer accounts; ' +
+                    'use listFallback: "text" to send a numbered menu instead',
+                );
+              }
+              const text = formatListAsText(menu);
+              counters.fallback += 1;
+              log.info('listMessage sent as a numbered plaintext menu', { jid, flow: flowName });
+              return Reflect.apply(original, self, [jid, { ...rest, text }, sendOptions]);
+            })();
+          }
 
           return (async () => {
             try {

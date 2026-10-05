@@ -25,7 +25,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { interactive, interactiveKeyOf } from '../dist/plugins/interactive.js';
+import { formatListAsText, interactive, interactiveKeyOf } from '../dist/plugins/interactive.js';
 
 import { GROUP, applyPlugin, fakeSocket, flush, pn } from './helpers.js';
 
@@ -50,7 +50,9 @@ function rig(options = {}) {
   // Captured BEFORE the patch. Capturing it after would compare the wrapper with
   // the pristine original and fail for a reason that has nothing to do with undo.
   const pristine = sock.sendMessage;
-  const harness = applyPlugin(interactive(options), sock);
+  // Default to the native path: these tests are about flow routing, and the
+  // consumer-tier plaintext fallback has its own section below.
+  const harness = applyPlugin(interactive({ listFallback: 'off', ...options }), sock);
   return { sock, relayed, pristine, ...harness };
 }
 
@@ -255,9 +257,11 @@ test('sending before the socket is open fails loudly rather than silently', asyn
   sock.user = undefined;
   const relayed = [];
   sock.relayMessage = async (...a) => relayed.push(a);
+  // BUTTONS, not LIST: a listMessage would be converted to plaintext before
+  // the open check, so this would assert against the wrong failure.
   applyPlugin(interactive(), sock);
 
-  await assert.rejects(() => sock.sendMessage(GROUP, LIST), /before the socket is open/);
+  await assert.rejects(() => sock.sendMessage(GROUP, BUTTONS), /before the socket is open/);
   assert.equal(relayed.length, 0, 'nothing should have been relayed');
 });
 
@@ -282,14 +286,14 @@ test('dispose restores the original sendMessage', () => {
   assert.equal(sock.sendMessage, pristine, 'the patch did not unwind');
 });
 
-test('the stats helper is non-enumerable and reports all three counters', async () => {
+test('the stats helper is non-enumerable and reports every counter', async () => {
   const { sock } = rig();
 
   await sock.sendMessage(GROUP, { text: 'pass' });
   await sock.sendMessage(GROUP, LIST);
 
   const stats = sock.__interactive.stats();
-  assert.deepEqual(Object.keys(stats).sort(), ['failed', 'passedThrough', 'sent']);
+  assert.deepEqual(Object.keys(stats).sort(), ['failed', 'fallback', 'passedThrough', 'sent']);
   assert.equal(stats.sent, 1);
   assert.equal(stats.passedThrough, 1);
   assert.equal(stats.failed, 0);
@@ -304,4 +308,70 @@ test('useCachedGroupMetadata defaults off, so a cold socket resolves participant
   const warm = rig({ useCachedGroupMetadata: true });
   await warm.sock.sendMessage(GROUP, LIST);
   assert.equal(warm.relayed[0].opts.useCachedGroupMetadata, true);
+});
+/* ── the listMessage plaintext fallback ────────────────────────────────── */
+
+/**
+ * A sectioned menu cannot leave a consumer account. Rather than send one and
+ * watch it vanish, the plugin renders the sections as a numbered plaintext
+ * menu — which keeps the grouping and survives on any client.
+ */
+
+test('a listMessage becomes a numbered plaintext menu, not a dropped flow', async () => {
+  const { sock, relayed } = rig({ listFallback: 'text' });
+
+  const result = await sock.sendMessage(GROUP, LIST);
+
+  assert.equal(relayed.length, 0, 'the native flow must not be relayed');
+  assert.equal(sock.sent.length, 1, 'it must go through the ordinary text path');
+
+  const text = sock.sent[0].content.text;
+  assert.match(text, /\[1\] \*Call Button\*/, 'rows must be numbered from 1');
+  assert.match(text, /Reply with a number/, 'the reply affordance must survive');
+  assert.match(text, /FEATURES/, 'section headings must be preserved');
+  assert.ok(result.key?.id, 'still returns a real message key');
+  assert.equal(sock.__interactive.stats().fallback, 1);
+});
+
+test('numbering runs across sections so a reply is unambiguous', () => {
+  const text = formatListAsText({
+    title: 'Menu',
+    sections: [
+      { title: 'A', rows: [{ title: 'one' }, { title: 'two' }] },
+      { title: 'B', rows: [{ title: 'three' }] },
+    ],
+  });
+  const numbers = [...text.matchAll(/\[(\d+)\]/g)].map((m) => Number(m[1]));
+  assert.deepEqual(numbers, [1, 2, 3], 'must not restart at each section');
+});
+
+test('an empty menu says so rather than rendering an empty box', () => {
+  const text = formatListAsText({ title: 'Menu', sections: [] });
+  assert.match(text, /no options/);
+});
+
+test('a list can be refused outright instead of converted', async () => {
+  const sock = fakeSocket();
+  sock.user = { id: ME, lid: '999:9@lid' };
+  sock.relayMessage = async () => {};
+  applyPlugin(interactive({ listFallback: 'throw' }), sock);
+
+  await assert.rejects(
+    () => sock.sendMessage(GROUP, LIST),
+    /dropped by the server/,
+    'throw must refuse the send, not convert it',
+  );
+});
+
+test('listFallback off sends the native flow anyway', async () => {
+  const sock = fakeSocket();
+  sock.user = { id: ME, lid: '999:9@lid' };
+  const relayed = [];
+  sock.relayMessage = async (jid, message, opts) => { relayed.push({ jid, message, opts }); };
+  applyPlugin(interactive({ listFallback: 'off' }), sock);
+
+  await sock.sendMessage(GROUP, LIST);
+
+  assert.equal(relayed.length, 1, 'off means send the flow and take the loss');
+  assert.equal(sock.sent.length, 0);
 });
