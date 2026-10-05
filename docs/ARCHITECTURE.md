@@ -1,6 +1,6 @@
 # ARCHITECTURE
 
-Nyx-Baileys 0.2.0 · upstream `@whiskeysockets/baileys@7.0.0-rc14` · Node ≥ 20
+Nyx-Baileys 0.3.0 · upstream `@whiskeysockets/baileys@7.0.0-rc14` · Node ≥ 20
 
 Snapshot: 2026-10-03, 51 TypeScript files under `src/`, 21 plugin modules of
 which 11 are in the default chain. Measured on the tree as it stood when this was

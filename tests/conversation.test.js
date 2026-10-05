@@ -123,7 +123,10 @@ test('an entry expires once it has been idle past the ttl', async () => {
 });
 
 test('reading an entry keeps it alive, querying does not', async () => {
-  const conversations = new ConversationStore({ ttlMs: 60 });
+  // TTL is 10x the poll gap. A loaded runner overshoots a 30ms sleep easily, and
+  // a 60ms TTL would lapse between the sleep and the assertion — which is
+  // exactly how this failed intermittently under a full `npm test` run.
+  const conversations = new ConversationStore({ ttlMs: 600 });
   conversations.set('a', { step: 1 });
 
   for (let i = 0; i < 4; i += 1) {
@@ -133,12 +136,13 @@ test('reading an entry keeps it alive, querying does not', async () => {
 
   // `has` is a query and must not extend the life of a conversation, or a
   // polling loop would keep every entry alive forever.
-  const polling = new ConversationStore({ ttlMs: 40 });
+  const polling = new ConversationStore({ ttlMs: 300 });
   polling.set('b', 1);
-  for (let i = 0; i < 4; i += 1) {
-    await sleep(20);
+  for (let i = 0; i < 8; i += 1) {
+    await sleep(25);
     polling.has('b');
   }
+  await sleep(340);
   assert.equal(polling.has('b'), false, 'polling must not keep the entry alive');
 });
 

@@ -1,6 +1,6 @@
 # FEATURES — 250 entries
 
-Nyx-Baileys 0.2.0 · snapshot 2026-10-04, 94 TypeScript files under `src/`,
+Nyx-Baileys 0.3.0 · snapshot 2026-10-05, 90 TypeScript files under `src/`,
 21 plugin modules (11 in the default chain)
 
 ## How to read this

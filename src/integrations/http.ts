@@ -135,7 +135,7 @@ export class HttpClient {
     this.#baseRetry = options.baseRetryMs ?? 250;
     this.#maxRetry = options.maxRetryMs ?? 4_000;
     this.#cacheTtl = options.cacheTtlMs ?? 60_000;
-    this.#ua = options.userAgent ?? 'nyx-baileys/0.2 (+integration-layer)';
+    this.#ua = options.userAgent ?? 'nyx-baileys/0.3 (+integration-layer)';
     this.#defaultRps = options.defaultRps ?? 2;
     this.#overrides = options.rateLimits ?? {};
   }

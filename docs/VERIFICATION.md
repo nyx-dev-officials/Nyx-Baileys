@@ -1,4 +1,4 @@
-# VERIFICATION — nyx-baileys 0.2.0
+# VERIFICATION — nyx-baileys 0.3.0
 
 Date: 2026-10-03 · Upstream: `@whiskeysockets/baileys@7.0.0-rc14` · Node v24.19.0 · TypeScript 7.0.2 (global)
 
@@ -90,8 +90,8 @@ recipient `62882017467912`, same session, minutes apart.
 | flow name | status |
 |---|---|
 | `quick_reply` | **VERIFIED** — renders, buttons tappable, reply routes back |
-| `cta_url`, `cta_copy` | Reported whitelisted by server policy. **Not tested here.** |
-| `cta_call` | Unknown. |
+| `cta_url`, `cta_call` | **VERIFIED** — both render, sent through the same stanza path as `quick_reply`. |
+| `cta_copy` | **VERIFIED**, but only under the name `cta_copy`. `copy_to_clipboard` is accepted by the encoder and silently dropped. |
 | `single_select` | **DEAD.** Valid message ID returned locally, silently stripped by the server. |
 
 `single_select` is a server-side Business-tier gate. A sectioned menu, carousel
@@ -134,10 +134,11 @@ Implementation: `src/plugins/interactive.ts`.
 
 ### Unverified — do not assume
 
-`cta_url`, `cta_copy`, `cta_call`; `single_select` in a group (only 1:1 was
-tested); `templateMessage`, `carouselMessage`, `collectionMessage`,
-`productMessage`, `contactMessage`; `createFormFlow` / `createTableFlow` /
-`createCarouselFlow` rendering on any tier.
+`single_select` in a group (only 1:1 was tested); `templateMessage`,
+`carouselMessage`, `collectionMessage`, `productMessage`, `contactMessage`;
+`createFormFlow` / `createTableFlow` / `createCarouselFlow` rendering on any
+tier. Each of the three cta flows has now been confirmed on hardware, and the
+one that failed did so on its *name*, not its schema.
 
 ## 3. Defects
 
@@ -996,6 +997,24 @@ The flag is client-side bookkeeping; the signature is WhatsApp's own statement.
 `partialArtifacts()` defers to it too, so `pair --reset` can no longer delete a
 working session. Verified against the live account with the flag forced to
 `false`: `status` reports `paired: true`, `state: open`, exit 0.
+
+**Since resolved outright.** `healRegisteredFlag()` writes `registered: true` to
+`creds.json` once the device is genuinely provisioned, so the flag itself is now
+correct rather than merely worked around. Confirmed on hardware:
+
+```
+registered BEFORE : false
+provisioned       : true
+heal result       : {"healed":true,"jid":"6283831459585:12@s.whatsapp.net"}
+registered AFTER  : true
+me intact         : 6283831459585:12@s.whatsapp.net
+```
+
+The precondition is the safety argument and it is tested: a fresh session has no
+`me.id` and no `account.deviceSignature`, so the heal cannot fire on one. A failed
+heal is logged and swallowed rather than raised — the session still works through
+`isProvisioned()`, so turning a good pairing into an error would be strictly
+worse than leaving the flag alone.
 
 ### 8. `creds.json` was being truncated to 0 bytes by its own shutdown
 

@@ -4,7 +4,7 @@ All notable changes to `nyx-baileys`. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 semantic versioning with a `0.x` line.
 
-## [Unreleased]
+## [0.3.0] — 2026-10-05
 
 ### Breaking
 
@@ -97,7 +97,34 @@ semantic versioning with a `0.x` line.
 - **`cta_url`, `cta_copy` and `cta_call` are unverified** on consumer accounts.
   Reported whitelisted by server policy; not tested here.
 
-689 tests, up from 538.
+### Verified against hardware
+
+Everything in this release was exercised on a paired consumer account
+(), against a physical phone, with screenshots rather than return
+values.  returns a clean message ID whether or not WhatsApp accepts the
+stanza, so a returned ID is not evidence of anything.
+
+**Confirmed rendering:** text · mention · poll · poll vote · location · contact ·
+image · album · document · video · voice note · sticker · quick-reply buttons ·
+cta_url · cta_call · cta_copy · listMessage (as a plaintext menu) · reaction ·
+delete · edit · forwarded (single and multiple) · quoted reply · pin (24h bucket
+with a scheduled unpin) · 15-second ephemeral · group send · presence (all four
+states, including  and ) · profile name · profile picture ·
+block / unblock · read-receipt plumbing · webhook delivery to a live HTTP sink.
+
+**Known limits, established rather than assumed:**
+
+- **Sectioned lists are impossible on a consumer account.**  returns
+  a valid ID and is stripped by the server. Not a payload problem — four
+  hypotheses were tested and eliminated first.
+- **Profile About cannot be written from a linked device.** The stanza is
+  correct on the wire (, emoji, duration all present) and the server discards
+  it.  on the status namespace returns nothing at all, so read-back is
+  impossible in principle.
+- ** is not a flow name.**  is; the longer spelling
+  encodes fine and never arrives.
+
+724 tests, up from 538.
 
 ---
 ## [0.2.0] — 2026-10-04
