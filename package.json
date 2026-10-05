@@ -30,7 +30,9 @@
     "./bot": "./dist/bot/index.js",
     "./bot/*": "./dist/bot/*.js",
     "./cli": "./dist/cli/index.js",
-    "./cli/*": "./dist/cli/*.js"
+    "./cli/*": "./dist/cli/*.js",
+    "./toolkit": "./dist/toolkit/index.js",
+    "./toolkit/*": "./dist/toolkit/*"
   },
   "bin": {
     "nyx-baileys": "./bin/nyx-baileys.js"

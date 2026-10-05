@@ -4,6 +4,52 @@ All notable changes to `nyx-baileys`. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 semantic versioning with a `0.x` line.
 
+## [Unreleased]
+
+### Added
+
+- ** plugin** — group subject, description, invite link and revoke, plus
+  per-chat mute, archive, pin, star, label, clear and mark-read. Every entry
+  validates its jid before touching the socket, and sends exactly one
+   union member — rc14's  is a discriminated union, and
+  passing two settings in one call matches no member and silently picks a branch.
+  Star is a , not a  content key.
+
+- ** module** — 20 operational helpers: a binary stanza observer, a
+  headless pairing-code extractor for containers with no scannable QR, a raw
+  AES-GCM media decryptor, a session integrity auditor, a socket heartbeat, a
+  priority queue, an RTT probe, a group delta listener, an app-state injector, an
+  ephemeral scavenger, and the everyday chat/group operations.
+
+  One deliberate deviation:  resolves  at
+  runtime rather than importing it. That export does not exist in rc14, and a
+  static import of a missing binding throws at module-evaluation time, taking the
+  whole module down. Lazy lookup keeps everything else working and lets this one
+  function name its own absence.
+
+
+
+### Added
+
+- **`chatOps` plugin** — group subject, description, invite link and revoke, plus
+  per-chat mute, archive, pin, star, label, clear and mark-read. Every entry
+  validates its jid before touching the socket, and sends exactly one
+  `chatModify` union member — rc14's `chatModify` is a discriminated union, and
+  passing two settings in one call matches no member and silently picks a
+  branch. Star is a `chatModify`, not a `sendMessage` content key.
+
+- **`toolkit` module** — 20 operational helpers: a binary stanza observer, a
+  headless pairing-code extractor for containers with no scannable QR, a raw
+  AES-GCM media decryptor, a session integrity auditor, a socket heartbeat, a
+  priority queue, an RTT probe, a group delta listener, an app-state injector,
+  an ephemeral scavenger, and the everyday chat/group operations.
+
+  One deliberate deviation: `rawDecryptMedia` resolves `decryptMediaMessage` at
+  runtime rather than importing it. That export does not exist in rc14, and a
+  static import of a missing binding throws at module-evaluation time, taking
+  the whole module down. Lazy lookup keeps everything else working and lets this
+  one function name its own absence.
+
 ## [0.3.0] — 2026-10-05
 
 ### Breaking

@@ -562,6 +562,46 @@ point. **Not counted in the 250** — see the note above.
 
 | # | Candidate | Layer | Honest note |
 |---|---|---|---|
+## toolkit (28)
+
+Operational helpers for chat and group administration, plus diagnostic hooks.
+Thin wrappers over the rc14 socket surface — no fork, no `node_modules` edits.
+
+| # | Name | Layer | What it does |
+|---|---|---|---|
+| 300 | `chatOps` | `plugins` | Group subject, description, invite link and revoke; per-chat mute, archive, pin, star, label, clear, mark-read. Every entry validates its jid first and sends exactly one `chatModify` union member. `plugins/chat-ops.ts` |
+| 301 | Metadata cache | `plugins` | `groupMetadata` costs a round trip, so results are cached (`metadataCacheMs`, default 60s) and invalidated on subject or description change. `fresh: true` bypasses. |
+| 302 | Invite link safety | `plugins` | `groupInviteCode` returns undefined for a group the account cannot invite into. The link is fetched rather than assumed, and `/undefined` is a hard error. |
+| 303 | `setMute` | `plugin` | rc14 takes an absolute expiry timestamp, not a duration. Null unmutes. |
+| 304 | `setStar` | `plugin` | Star is a `chatModify`, **not** a `sendMessage` content key — sending it via `sendMessage` does nothing at all. |
+| 305 | `attachStanzaInterceptor` | `toolkit` | Observes raw binary frames on `sock.ws.send` without allocating. Non-buffer sends pass through untouched; returns a detach. |
+| 306 | `extractPairingCode` | `toolkit` | Headless 8-character code for Docker and cloud, where no human can scan a terminal QR. Removes its listener once resolved. |
+| 307 | `rawDecryptMedia` | `toolkit` | Raw AES-GCM decrypt from `directPath`/`mediaKey`. **Runtime lookup, not a static import** — see the note below. |
+| 308 | `auditSessionIntegrity` | `toolkit` | Catches a half-written creds file on boot, before it turns into a reconnection loop. |
+| 309 | `sessionFingerprint` | `toolkit` | Stable 16-hex digest for change detection. Hashes *whether* a key is present, never its value. |
+| 310 | `forceSocketHeartbeat` | `toolkit` | WS ping to defeat carrier NAT timeouts. Only pings an `OPEN` socket, clears on close, returns a disposer. |
+| 311 | `PriorityMessageQueue` | `toolkit` | Higher priority drains first. Resets in a `finally`, so a rejected send cannot wedge the queue permanently. |
+| 312 | `measureSocketLatency` | `toolkit` | RTT in ms via an `iq` round trip. |
+| 313 | `setupGroupDeltaListener` | `toolkit` | Isolates subject, description and participant changes. Returns a detach. |
+| 314 | `injectAppStatePatch` | `toolkit` | Raw app-state mutation at `regular_high`. |
+| 315 | `EphemeralMemoryScavenger` | `toolkit` | Clears completed self-destruct handles by id, idempotently. |
+| 316 | `sendContactCard` | `toolkit` | vCard with `waid`, so the phone can save the contact natively. |
+| 317 | `sendLocationPin` | `toolkit` | Coordinates plus a place name. |
+| 318 | `updateGroupSubject` / `updateGroupDescription` | `toolkit` | Pass-through to rc14. An empty description clears it rather than failing. |
+| 319 | `getGroupInviteLink` | `toolkit` | Builds the HTTPS join link, or throws rather than producing `/undefined`. |
+| 320 | `setChatMute` / `setChatArchive` / `setChatPin` | `toolkit` | One union member per call. |
+| 321 | `starMessage` | `toolkit` | Routed through `chatModify`, never `sendMessage`. |
+| 322 | `sendMediaWithCaption` | `toolkit` | Buffer is the **value** of the media key, `mimetype`/`fileName` beside it. `{ image: { buffer } }` matches none of rc14's three `getStream` branches and dies on `undefined.url`. |
+| 323 | `attachOpsToolkit` | `toolkit` | Attaches the interceptor and heartbeat together, with one detach that survives a failing disposer. |
+
+> **The one deliberate deviation.** `rawDecryptMedia` resolves
+> `decryptMediaMessage` at runtime rather than importing it. That export does not
+> exist in rc14 (the tree exposes `downloadMediaMessage` and
+> `decryptMediaRetryData`), and a static named import of a missing binding throws
+> at module-evaluation time — which would take this whole module, and every
+> importer of it, down. Looking it up lazily means everything else keeps working
+> and this one function reports its own absence by name.
+
 | T1 | WebRTC/VoIP relay transport | `core` | The only fork in the reference set that gets past signalling. Dual relay ports (3478 STUN vs 3480 real client), idempotent SDP `a=fingerprint` rewrite, ICE restart/RTT bounds. A project, not a feature. `T35` |
 | T2 | RTP pre-roll | `core` | 500 ms buffer so the first audio chunks are not clipped. Genuine audio-quality fix, cheap. `T36` |
 | T3 | `injectable getMessage` | `adapters` | Already reachable via `createSessionStore`; promoting it to a first-class option is easy. `T16` |
