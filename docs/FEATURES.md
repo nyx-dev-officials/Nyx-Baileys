@@ -160,7 +160,7 @@ re-proposes them.
 | # | Name | Layer | What it does |
 |---|---|---|---|
 | 64 | `downloadMedia()` | `plugins` | Guarded download returning `{buffer, mime, fileName, bytes}` with a size ceiling enforced. `plugins/media-stream.ts:61-97` |
-| 65 | `streamMedia()` | `plugins` | `[partial]` Decrypts once then hands out 64 KB chunks. The full buffer still exists first, so peak memory is the whole asset — the docstring concedes this rather than claiming bounded memory. `plugins/media-stream.ts:100-114` |
+| 65 | `streamMedia()` | `plugins` | `[partial]` Decrypts once then hands out 64 KB chunks with the ceiling enforced as bytes arrive. **Chunked handoff, not bounded memory** — rc14 materialises the full buffer first, so peak is the whole asset plus one chunk. The docstring says so. `plugins/media-stream.ts` |
 | 66 | `MediaTooLargeError` | `plugins` | Typed error carrying both `bytes` and `limit` so the caller can decide to skip or fetch out of band. `plugins/media-stream.ts:40-48` |
 | 67 | Empty-decrypt throws | `plugins` | An expired key or unsupported type throws instead of returning an empty buffer, which is how broken-media bugs survive for months. `plugins/media-stream.ts:74-78` |
 | 68 | Declared-size early reject | `plugins` | A sender-declared `fileLength` over the ceiling is refused before the RAM is spent; untrusted input can only reject early, never approve. `plugins/media-stream.ts:84-87` |

@@ -612,19 +612,29 @@ directory form and 9 failing tests. Both are resolved:
 
 ### Still open
 
-`VERIFICATION.md` tracks D0–D14. Six are resolved (D0, D2, D5, D9) and four were
-never real defects (D1, D3, D7, D8). The remainder:
+`VERIFICATION.md` tracks D0–D14. Ten are closed and four were never real defects.
+**One remains open.**
 
 | Defect | State |
 |---|---|
-| D4 `goto()` re-entrancy | Still unguarded — `plugins/flow.ts`. `goto` into a step can no-op silently if the flow ended or TTL-expired. |
-| D6 privilege-climb check | Still tautological — `plugins/group.ts`. `known` counts promote events, so `known >= 3` means "three promotes", not "all members are admins". |
-| D10 `streamMedia` | Still materialises the full buffer then slices. The docstring now concedes this rather than claiming bounded memory. |
-| D11 `patchAll` | Returns a redundant first element. |
-| D12 album sentinel | A magic sentinel is used as a real expected-count. |
-| D13 `main()` | Installs a second `connection.update` listener. |
-| D14 warm-up ramp | Evaluated once per socket build rather than on an interval. |
+| D4 `goto()` re-entrancy | **CLOSED** — `flow.ts:200-203` checks `active.get(jid) !== running` and warns instead of dropping the jump. |
+| D6 privilege-climb check | **CLOSED** — `group.ts:129` measures `known / population`, so a demotion genuinely lowers the signal. It is no longer a promote-event counter. |
+| D10 `streamMedia` | **CLOSED (documentation)** — the design gap is upstream's and unchanged: rc14 materialises the full buffer before chunking. Both the module docstring and `streamTo` now say "chunked handoff, not bounded memory". |
+| D11 `patchAll` | **CLOSED** — the array is exactly the applied patches; undo-everything is `undoAll()`. Absent methods no longer occupy a slot. |
+| D12 album sentinel | **OPEN** — a design wart, not a live bug. The placeholder repair at `album.ts:105-108` is correct and tested. A nullable `expected` is the honest fix; left as a wider refactor. |
+| D13 `main()` duplicate listener | **CLOSED** — zero `connection.update` registrations in `cli/main.ts`. |
+| D14 warm-up ramp | **CLOSED** — `warmup.ts:60` re-evaluates hourly, so a long-lived socket eases toward 1× instead of holding its day-one multiplier for the process lifetime. |
+
+### Not code defects, but worth knowing
+
+- **`interactive` is opt-in.** It is not in `plugins()`, so
+  `registerPlugin(interactive())` is required or interactive messages throw
+  `Boom: Invalid media type`.
+- **Sectioned lists (`single_select`) cannot be sent from a consumer account.**
+  Server-side Business-tier gate. Only the Business API produces one.
+- **`createEdit` is a breaking signature change** from `0ece183`; see the
+  changelog. Nothing in-repo calls it.
+- **`cta_url`, `cta_copy`, `cta_call` are unverified** on consumer accounts.
 
 ---
-
 

@@ -350,12 +350,18 @@ test('BUG: Disposables.dispose() restores every patched method, not just the fir
 
 /*
  * ---------------------------------------------------------------------------
- * KNOWN BUG — same root cause through `patchAll`, whose single combined handle
- * promises "one disposer restores every method this call touched"
- * (src/core/intercept.ts:102).
+ * Regression — src/core/intercept.ts patchAll
+ *
+ * The combined handle used to be element 0 of the returned array, so
+ * `patches.length` was one more than the number of methods patched and
+ * `patches[0].undo()` meant "undo everything" while `patches[1].undo()` meant
+ * "undo one method". One method, two meanings, decided by position.
+ *
+ * Undo-everything is a genuine capability and is preserved as `undoAll` on the
+ * array. The array itself is now exactly the patches that applied.
  * ---------------------------------------------------------------------------
  */
-test('BUG: patchAll — one undo restores every method it patched', () => {
+test('patchAll returns exactly the patches that applied', () => {
   const target = {
     sendMessage() {
       return 'orig-send';
@@ -372,14 +378,15 @@ test('BUG: patchAll — one undo restores every method it patched', () => {
     relayMessage: (o, s, a) => `B(${Reflect.apply(o, s, a)})`,
   });
 
-  patches[0].undo();
+  assert.equal(patches.length, 2, 'length must equal the number of methods patched');
+  patches.undoAll();
 
   assert.equal(target.sendMessage, originalSend);
   assert.equal(target.relayMessage, originalRelay);
   assert.equal(target.relayMessage(), 'orig-relay');
 });
 
-test('patchAll skips absent methods without failing the rest', () => {
+test('patchAll length is not inflated by an absent method', () => {
   const target = {
     sendMessage() {
       return 'orig';
@@ -390,10 +397,17 @@ test('patchAll skips absent methods without failing the rest', () => {
     ghostMethod: () => 'never',
   });
 
-  assert.equal(target.sendMessage(), 'A(orig)');
+  assert.equal(patches.length, 1, 'an absent method must not add an element');
+  assert.equal(patches.applied, true);
   patches[0].undo();
   assert.equal(target.sendMessage(), 'orig');
-  assert.equal(target.ghostMethod, undefined);
+});
+
+test('patchAll reports applied: false when nothing applied', () => {
+  const patches = patchAll({}, { ghost: () => 'never' });
+  assert.equal(patches.length, 0);
+  assert.equal(patches.applied, false);
+  assert.doesNotThrow(() => patches.undoAll(), 'undoAll on an empty patch set must be safe');
 });
 
 test('Disposables unwinds in reverse order and survives a throwing disposer', () => {

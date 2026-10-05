@@ -481,46 +481,78 @@ Fix — add `autoReconnect()` to the chain.
 
 ---
 
-### D10 — MEDIUM · `streamMedia` is not streaming
-`src/plugins/media-stream.ts:95-105`
+### D10 — RESOLVED (documentation) · `streamMedia` does not bound peak memory, and now says so
 
-`streamTo` calls `fetch()` — which materialises the **entire** decrypted buffer at
-`:68-70` — then slices it into 64 KB chunks. The docstring at `:19-20` claims "the
-peak is bounded by the chunk, not by the asset". It is not: peak memory is the full
-asset plus one chunk. For the 300 MB video the module was written to protect against,
-this is the same peak as the naive call.
+The design gap is real and unchanged: `streamTo` asks rc14 for a `'stream'` and
+forwards it in 64 KB chunks, but rc14 materialises the **entire** decrypted buffer
+before yielding pieces. Peak memory is the whole asset plus one chunk — for the
+300 MB video the module exists to protect against, the same peak as the naive call.
 
-The comment at `:90-94` half-concedes this ("the full buffer exists briefly because
-the socket delivers it that way"), which makes the `:19-20` claim a documentation
-defect on top of a design gap.
+What changed is the claim. The module docstring and the `streamTo` comment both
+asserted *"the caller never holds the full asset: peak memory is a stream chunk plus
+the coalescing buffer"*, which is false and load-bearing — a caller reading it
+would pick this function precisely when it cannot help.
 
-Fix — either use the socket's real streaming path
-(`downloadMediaMessage(msg, 'stream', …)` is exported and typed, per
-`lib/Utils/messages.d.ts:87`) or correct the docstring to say "chunked handoff, not
-bounded memory".
+Both now state: **chunked handoff, not bounded memory.** What the chunking does buy
+is real and worth keeping — the caller never needs a second full copy, and the size
+ceiling is enforced as bytes arrive rather than after the fact, so an under-declared
+asset is still stopped. That is a genuine improvement on `downloadMedia`, which must
+materialise before it can check anything.
+
+The docstring now also says what to do instead: if peak RAM is the constraint,
+decrypt to a file in a separate process, or use a client with incremental decryption.
+
+<details><summary>Original finding (historical — the docstring claim was accurate when written)</summary>
+
+`streamTo` calls `fetch()` — which materialises the **entire** decrypted buffer —
+then slices it into 64 KB chunks. The docstring claimed "the peak is bounded by the
+chunk, not by the asset". It is not: peak memory is the full asset plus one chunk.
+
+Fix — either use the socket's real streaming path or correct the docstring to say
+"chunked handoff, not bounded memory". **The second option was taken:** the design
+gap is upstream's, and claiming otherwise would be worse than documenting it.
+
+</details>
 
 ---
 
-### D11 — LOW · `patchAll` returns a redundant first element
-`src/core/intercept.ts:93-101`
+### D11 — RESOLVED · `patchAll` returns exactly the patches that applied
+`src/core/intercept.ts:97-127`
 
-Returns `[aggregate, ...applied.slice(1)]`. The aggregate's `undo()` already unwinds
-everything, and `applied[0]` is silently dropped from the returned array. A caller
-iterating the result gets `N` handles where the first is a superset of the rest —
-easy to double-undo. Not currently called anywhere in `src/`, so latent.
+It returned `[aggregate, ...applied.slice(1)]`. The aggregate's `undo()` unwound
+everything *and* `applied[0]` was dropped from the array, so a caller got N handles
+where the first was a superset of the rest — `patches[0].undo()` meant "undo
+everything" while `patches[1].undo()` meant "undo one method". Same method, two
+meanings, decided by position.
 
-Fix — return just the aggregate, or return `applied` unmodified.
+Two things were wrong, and only one was visible:
 
----
+- The aggregate element made `length` one more than the number of methods patched.
+- **Absent methods also occupied a slot.** A name with no matching method yields a
+  no-op handle, so `length` counted *requested* names rather than methods actually
+  wrapped — a caller could not distinguish a patched method from a missing one.
 
-### D12 — LOW · `album` uses a magic sentinel as a real expected-count
-`src/plugins/album.ts:105`, `:113`
+Now the array is exactly the applied patches, and undo-everything lives on the array
+as `undoAll()` rather than being smuggled in as a fake element. Reverse order, so a
+later patch unwinds before the one it wrapped.
 
-`ensure(parent, jid, Number.MAX_SAFE_INTEGER)` when no parent is known yet, then
-`album.expected !== Number.MAX_SAFE_INTEGER` gates completion. If the parent message
-arrives *after* its siblings, `ensure` returns the existing entry at `:67-68` and
-never updates `expected`, so `completedAt` is never set and `waitFor` times out
-(`:151`). Race is order-dependent and unresolved.
+Returning only the aggregate was considered and rejected: undo-everything is a real
+capability, and `patches[i].undo()` should mean exactly one method.
+
+### D12 — OPEN (design wart) · `album` uses a magic sentinel as a real expected-count
+`src/plugins/album.ts:82`, `:105-108`
+
+A sibling arriving before its parent creates the album with a
+`MAX_SAFE_INTEGER` placeholder count. The repair exists: when the parent arrives,
+`:105-108` compares against the placeholder and adopts the real count, logging
+`album parent arrived late, count resolved`. Without it, `completedAt` would never be
+set and `waitFor` would time out on a healthy album.
+
+Left open deliberately. A sentinel that flows through `waitFor` arithmetic is
+surprising by construction — a future change that reads `expected` before the parent
+lands gets a nonsense number rather than an obvious `undefined`. The honest fix is a
+nullable `expected: number | null` and a completion check that ignores `null`, which
+is a wider refactor than this entry is worth. The repair path is tested and correct.
 
 ---
 

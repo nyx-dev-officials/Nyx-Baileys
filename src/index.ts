@@ -48,7 +48,7 @@ export {
 
 export { createSessionStore, FileSessionStore, MemorySessionStore } from './core/session-store.js';
 export { DEFAULT_BROWSER, desktopUserAgent, resolveWebVersion } from './core/socket.js';
-export { patch, patchAll, Disposables } from './core/intercept.js';
+export { patch, patchAll, Disposables, type PatchSet } from './core/intercept.js';
 
 /* ── reference-fork features (ported) ────────────────────────────── */
 export { ClockSync } from './core/clock.js';

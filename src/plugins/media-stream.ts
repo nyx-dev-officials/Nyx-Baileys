@@ -20,8 +20,21 @@ import type { Plugin } from '../utils/types.js';
  *      unsupported media both return empty, and that is how broken media bugs
  *      survive for months
  *   3. `streamTo`, which asks rc14 for a `stream` and forwards it one chunk at a
- *      time, so peak memory is the chunk (plus a small coalescing buffer), not
- *      the asset
+ *      time, with a size ceiling checked as bytes arrive
+ *
+ * ## Memory bounds — read this before trusting `streamTo`
+ *
+ * **Chunked handoff, not bounded memory.** Upstream rc14 materialises the full
+ * decrypted buffer before it hands back a `stream`, so peak memory is the whole
+ * asset plus one chunk. Chunking changes the *handoff* shape — the caller never
+ * needs a second full copy, and the ceiling is enforced incrementally rather than
+ * after the fact — but it does not reduce the peak.
+ *
+ * The distinction matters because a 300 MB download is exactly the case this was
+ * written for, and here the peak is the same as the naive `downloadMediaMessage`
+ * call. If peak RAM is the constraint, this is the wrong function: decrypt to a
+ * file in a separate process, or use a client that supports incremental
+ * decryption.
  */
 
 export interface MediaStreamOptions {
@@ -112,11 +125,15 @@ export function mediaStreamer(options: MediaStreamOptions = {}): Plugin {
       };
 
       /**
-       * Stream the decrypted payload out one chunk at a time. rc14's `'stream'`
-       * mode yields a `Transform` that decrypts lazily, so the caller never
-       * holds the full asset: peak memory is a stream chunk plus the coalescing
-       * buffer. The byte ceiling is enforced *during* the transfer, so an
-       * under-declared asset is still stopped.
+       * Stream the decrypted payload out one chunk at a time.
+       *
+       * The byte ceiling is enforced *during* the transfer, so an under-declared
+       * asset is still stopped — that part is a real improvement on `downloadMedia`,
+       * which must materialise the whole buffer before it can check anything.
+       *
+       * Peak memory is **not** bounded. rc14's `'stream'` mode decrypts the full
+       * asset first and then yields pieces of it, so the peak is the asset plus
+       * one chunk. See the module docstring.
        */
       const streamTo = async (
         message: WAMessage,

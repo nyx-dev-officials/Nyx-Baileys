@@ -64,7 +64,7 @@ export {
 } from './core/errors.js';
 
 /* ── interception primitive ──────────────────────────────────────────── */
-export { patch, patchAll, Disposables } from './core/intercept.js';
+export { patch, patchAll, Disposables, type PatchSet } from './core/intercept.js';
 export type { Patch } from './core/intercept.js';
 
 /* ── logging ─────────────────────────────────────────────────────────── */

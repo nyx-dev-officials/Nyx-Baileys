@@ -93,31 +93,58 @@ export function patch<T extends object>(
   };
 }
 
+/**
+ * The array `patchAll` returns: exactly the patches that applied, plus
+ * `undoAll()` for unwinding the whole set.
+ *
+ * `length` is the number of methods actually wrapped, so an absent method is
+ * distinguishable from a patched one.
+ */
+export type PatchSet<T extends object> = Patch<T>[] & {
+  /** True when at least one patch applied. */
+  readonly applied: boolean;
+  /** Restore every method this call touched. Each handle is idempotent. */
+  undoAll(): void;
+};
+
 /** Patch many methods as one unit. */
 export function patchAll<T extends object>(
   target: T,
   wrappers: Partial<Record<keyof T & string, Wrapper<any>>>,
-): Patch<T>[] {
+): PatchSet<T> {
   const undoers: Array<() => void> = [];
   const applied: Array<Patch<T>> = [];
 
   for (const [name, wrapper] of Object.entries(wrappers)) {
     if (!wrapper) continue;
-    const p = patch(target, name as keyof T & string, wrapper as Wrapper<any>);
-    applied.push(p);
-    if (p.applied) undoers.push(() => p.undo());
+    const p = patch(target, name as keyof T & string, wrapper as never);
+    // A method that isn't there yields a no-op handle. Keeping it made
+    // `patches.length` a count of *requested* names rather than of methods
+    // actually wrapped, so a caller could not tell one patched method from
+    // one that was absent.
+    if (p.applied) {
+      applied.push(p);
+      undoers.push(() => p.undo());
+    }
   }
 
-  // One disposer restores every method this call touched.
-  return [
-    {
-      applied: applied.some((p) => p.applied),
-      undo: () => {
-        for (const undo of undoers) undo();
-      },
+  // The returned array is exactly the patches that applied — no aggregate handle
+  // prepended. That handle used to be element 0, which made `patches.length` one
+  // more than the number of methods patched, and left `patches[0].undo()` meaning
+  // "undo everything" while `patches[1].undo()` meant "undo one method". Same
+  // method, two meanings, decided by position.
+  //
+  // Undo-everything is a real capability, so it lives on the array as `undoAll`
+  // rather than being smuggled in as a fake element.
+  return Object.assign(applied, {
+    /** True when at least one patch applied. */
+    applied: applied.length > 0,
+    /** Restore every method this call touched. Each handle is idempotent. */
+    undoAll: () => {
+      // Reverse, so a later patch unwinds before the one it wrapped.
+      for (let i = undoers.length - 1; i >= 0; i -= 1) undoers[i]!();
     },
-    ...applied.slice(1),
-  ];
+  });
 }
 
 /**
