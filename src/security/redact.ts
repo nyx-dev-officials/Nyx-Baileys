@@ -160,6 +160,16 @@ const SENSITIVE_KEYS: ReadonlySet<string> = new Set([
   'clientsecret',
   'apikey',
   'apisecret',
+  // The base word, not just the compound forms. `apitoken`, `accesstoken`,
+  // `bearertoken` and `sessiontoken` were all listed while bare `token` was not,
+  // which is backwards: `{ token }` is the most common credential field of the
+  // lot and the only one that passed through in plaintext, at any depth.
+  //
+  // It was reachable at all only because it also sat in CONTEXTUAL_KEYS, whose
+  // sibling check requires a `public` neighbour. Without one, nothing consulted
+  // it. `{ token: 'sk_live_…' }` and `{ nested: { token: '…' } }` both came out
+  // of `redact()` untouched.
+  'token',
   'accesstoken',
   'refreshtoken',
   'idtoken',
@@ -199,12 +209,17 @@ const PII_KEYS: ReadonlySet<string> = new Set([
  * Keys that are only secret in context.
  *
  * `private` on its own is too broad to mask unconditionally — it appears on
- * half of all config objects meaning "is this private?". It is a secret when
- * it is one half of a key pair, which is detectable from the sibling `public`.
+ * half of all config objects meaning "is this private?". It is a secret when it
+ * is one half of a key pair, which is detectable from the sibling `public`.
  * Precision here is the difference between a redaction layer people keep
  * enabled and one they turn off in week two.
+ *
+ * Only `private` actually reaches this set. `secret` and `token` are both in
+ * `SENSITIVE_KEYS`, and `isSensitiveKey` is consulted first at the walk site, so
+ * they are masked unconditionally before the sibling check could ever apply.
+ * They are listed here historically and are unreachable.
  */
-const CONTEXTUAL_KEYS: ReadonlySet<string> = new Set(['private', 'secret', 'token']);
+const CONTEXTUAL_KEYS: ReadonlySet<string> = new Set(['private']);
 
 const normalizeKey = (key: string): string => key.toLowerCase().replace(/[^a-z0-9]/g, '');
 
@@ -580,7 +595,30 @@ function walk(
 
   const record_ = value as Record<string, unknown>;
 
+  /*
+   * Establish this object's own sibling set before iterating it.
+   *
+   * `walkWithSiblings` set `state.seenKeys` once, for the root only, because the
+   * recursion below reaches `walk` directly. Every nested object therefore
+   * resolved `CONTEXTUAL_KEYS` against the *top level's* keys: `{ private,
+   * public }` masked at the root, `{ key: { private, public } }` did not, and a
+   * private key passed through in plaintext one level down.
+   *
+   * Set here rather than around each child so the whole loop sees its own
+   * container's keys, and restored below so a stray `public` further up cannot
+   * mask an unrelated `private` in here.
+   */
+  let thisSeen: Set<string>;
+  try {
+    thisSeen = new Set(Object.keys(record_).map(normalizeKey));
+  } catch {
+    thisSeen = new Set(); // exotic proxy; no siblings to reason about
+  }
+  const previousSeen = state.seenKeys;
+  state.seenKeys = thisSeen;
+
   const out: Record<string, unknown> = {};
+  try {
   for (const k of Object.keys(record_)) {
     let raw: unknown;
     try {
@@ -620,12 +658,15 @@ function walk(
       state.inherited = piiKey ? 'pii' : 'key';
     }
 
-    try {
+        try {
       const child = walk(raw, join(path, k), depth + 1, state);
       if (child !== undefined) out[k] = child;
     } finally {
       state.inherited = previousInherited;
     }
+  }
+  } finally {
+    state.seenKeys = previousSeen;
   }
   return out;
 }
