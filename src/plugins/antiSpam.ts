@@ -184,6 +184,10 @@ export function antiSpam(user: Partial<AntiSpamOptions> = {}): Plugin {
           pressure = Math.max(1, n);
         },
         stats: () => ({ queued: queue.length, sent: sentAt.length, pressure }),
+        // The resolved config, not the defaults. `antiSpam` in SuperOptions used
+        // to be silently discarded by `plugins()`, and there was no way to see
+        // that from outside — the only symptom was pacing nobody had asked for.
+        config: () => ({ ...cfg, pressure }),
         reset: () => {
           queue.length = 0;
           sentAt.length = 0;

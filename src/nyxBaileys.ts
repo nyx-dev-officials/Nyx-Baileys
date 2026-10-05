@@ -58,6 +58,16 @@ export class NyxBaileys {
 
   /** Decorators, lowest order first. Override via `registerPlugin`. */
   protected plugins(): Plugin[] {
+    // Every factory here used to be called with no arguments, which meant the
+    // matching `SuperOptions` fields were type-checked, documented, and then
+    // silently discarded — `antiSpam` and `warmupDays` both.
+    //
+    // Symptom, measured on hardware: `{ antiSpam: { minGapMs: 300, maxGapMs:
+    // 700 } }` still paced every send at ~20s, because the plugin was running on
+    // DEFAULTS (minGapMs 2.5s + jitterMs 4s). `{ warmupDays: 0 }` likewise left
+    // the day-one ramp active. Both looked like "the option is broken"; it was
+    // never plumbed through.
+    const o = this.options;
     return [
       stealth(),      // 10  identity + tuning
       clockSync(),    // 15  server clock estimate
@@ -68,10 +78,10 @@ export class NyxBaileys {
       groupGuard(),   // 60  admin policy
       sessionRepair(),// 65  message normaliser
       autoReconnect(), // 70  self-healing backoff
-      antiSpam(),     // 80  pacing queue
+      antiSpam(o.antiSpam),   // 80  pacing queue
       delivery(),     // 85  delivery-rate tracking
       flowEngine(),   // 90  conversational routing
-      warmup(),       // 100 rate ramp
+      warmup(o.warmupDays),   // 100 rate ramp
     ];
   }
 
