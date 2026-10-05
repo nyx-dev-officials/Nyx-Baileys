@@ -20,8 +20,6 @@
     "./plugins": "./dist/plugins/index.js",
     "./plugins/*": "./dist/plugins/*.js",
     "./utils/*": "./dist/utils/*.js",
-    "./adapters": "./dist/adapters/index.js",
-    "./adapters/*": "./dist/adapters/*.js",
     "./multi": "./dist/multi/index.js",
     "./multi/*": "./dist/multi/*.js",
     "./security": "./dist/security/index.js",

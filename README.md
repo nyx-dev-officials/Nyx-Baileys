@@ -217,7 +217,7 @@ src/
   integrations/      keyless HTTP integrations + Indonesian localisation
   utils/             types · compose · logger · text · format · random ·
                      time · args · cache · queue
-  adapters/          SessionStore: sqlite · mongo · prisma · redis
+
   multi/             SessionManager — one process, N accounts
   security/          validate · redact · permissions · acl · audit
   cli/               args · output
@@ -274,7 +274,7 @@ pass. Status is `VERIFICATION.md`'s, updated where a fix changed it.
 | 9 | Memory GC store | covered | `plugins/memory.ts` — refcount-guarded eviction (D7) |
 | 10 | Payload normaliser | covered | `plugins/session-repair.ts:81` — was dead (D3) |
 | 11 | Multi-session core | covered | `nyxBaileys.ts:33`; `multi/session-manager.ts` |
-| 12 | SQL/NoSQL session bridge | covered | `core/session-store.ts:128`; `adapters/` |
+
 | 13 | Auto-retry backoff | covered | `plugins/reconnect.ts:63` — was unwired (D9) |
 | 14 | Media streaming | covered | `plugins/media-stream.ts` — true `stream` path (D10) |
 | 15 | Group management | covered | `plugins/group.ts` — membership-ratio climb (D6) |

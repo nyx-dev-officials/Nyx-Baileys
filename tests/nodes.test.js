@@ -374,28 +374,76 @@ test('createAlbumContainer splits the expected counts by media kind', () => {
 
 /*
  * ---------------------------------------------------------------------------
- * KNOWN BUG — src/core/nodes.ts:263-265
+ * Regression — src/core/nodes.ts createEdit
  *
- * rc14's `editedMessage` is a *wrapper* type (`{ message: {...} }`), the same
- * shape as `viewOnceMessage`. It has no `text` field. `createEdit` writes
- * `{ editedMessage: { text } }`, so protobufjs drops the unknown `text` key and
- * the node encodes to an empty wrapper — a "silent edit" that carries no text
- * at all and shows up on WhatsApp as an empty edit.
+ * An edit is not a `FutureProofMessage`. It is a protocol message:
  *
- * The assertion below encodes the node through real protobufjs and is the
- * behaviour the function's name and doc promise. It fails today; do not weaken
- * it to match the current output.
+ *   protocolMessage { key, editedMessage, timestampMs, type: MESSAGE_EDIT }
+ *
+ * rc14 assembles that in `generateWAMessageContent` (`Utils/messages.js:514`)
+ * when it sees an `edit` key, so the fix is to hand rc14 `{ text, edit: key }`
+ * and let it do the wrapping.
+ *
+ * The hand-built form encoded to 15 bytes: a wrapper with no protocol message,
+ * no target key and no edit type — carrying no text and naming nothing to edit.
+ * Measured against the real thing, which is 71 bytes with `type: 14`.
  * ---------------------------------------------------------------------------
  */
-test('BUG: createEdit actually carries the text onto the wire', () => {
-  const node = createEdit('new body');
-  const bytes = proto.Message.encode(node.message).finish();
-  const decoded = proto.Message.decode(bytes);
 
+/** Mirror rc14's `edit` branch (messages.js:514) so the test exercises the real path. */
+function compileLikeRc14(content) {
+  let m = { conversation: content.text };
+  if (content.edit) {
+    m = {
+      protocolMessage: {
+        key: content.edit,
+        editedMessage: m,
+        timestampMs: 1750000000000,
+        type: proto.Message.ProtocolMessage.Type.MESSAGE_EDIT,
+      },
+    };
+  }
+  return proto.Message.create(m);
+}
+
+const TARGET = { remoteJid: '62882017467912@s.whatsapp.net', fromMe: true, id: 'PARENTID123' };
+
+test('createEdit compiles to a real MESSAGE_EDIT protocol message', () => {
+  const content = createEdit(TARGET, 'new body');
+  const decoded = proto.Message.decode(proto.Message.encode(compileLikeRc14(content)).finish());
+
+  const pm = decoded.protocolMessage;
+  assert.ok(pm, 'an edit must be a protocolMessage, not a bare editedMessage wrapper');
+  assert.equal(pm.type, proto.Message.ProtocolMessage.Type.MESSAGE_EDIT, 'must be an edit type');
+  assert.equal(pm.key?.id, 'PARENTID123', 'must name the message being edited');
+  assert.equal(pm.editedMessage?.conversation, 'new body', 'must carry the new text');
+});
+
+test('the old FutureProofMessage shape is measurably the silent failure', () => {
+  // Why this test exists: `editedMessage` is a real protobuf type, so building it
+  // by hand compiles without complaint and looks correct. It just is not the
+  // wire shape for an outbound edit.
+  const handBuilt = proto.Message.create({
+    editedMessage: proto.Message.FutureProofMessage.create({
+      message: proto.Message.create({ conversation: 'new body' }),
+    }),
+  });
+  const brokenBytes = proto.Message.encode(handBuilt).finish();
+  const realBytes = proto.Message.encode(compileLikeRc14(createEdit(TARGET, 'new body'))).finish();
+
+  const broken = proto.Message.decode(brokenBytes);
   assert.ok(
-    decoded.editedMessage?.message,
-    'editedMessage must wrap a real message; it currently encodes as an empty wrapper',
+    broken.protocolMessage == null,
+    'the broken shape carries no protocol message',
   );
-  const inner = decoded.editedMessage.message;
-  assert.equal(inner.conversation ?? inner.extendedTextMessage?.text, 'new body');
+  assert.ok(
+    brokenBytes.length < realBytes.length / 2,
+    `the broken shape should be far smaller (${brokenBytes.length} vs ${realBytes.length})`,
+  );
+});
+
+test('createEdit needs a target key', () => {
+  const content = createEdit(TARGET, 'x');
+  assert.equal(content.edit, TARGET, 'the key must be passed through untouched');
+  assert.equal(content.text, 'x');
 });

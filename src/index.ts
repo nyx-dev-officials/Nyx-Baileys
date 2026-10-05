@@ -186,7 +186,7 @@ export * from './utils/validate.js';
  * symbol Baileys exports is re-exported here, so an application can depend on
  * `nyx-baileys` alone and still reach `proto`, `useMultiFileAuthState`,
  * `DisconnectReason`, `downloadMediaMessage` and the rest — while the decorated
- * socket, plugins, adapters and integrations come from this package.
+ * socket, plugins and integrations come from this package.
  *
  * A local export shadows a star export of the same name, so the explicit
  * `proto` and plugin exports above win over upstream's identical `proto`.
@@ -196,7 +196,6 @@ export * from '@whiskeysockets/baileys';
 
 /* ── extended surface (added by the module layer) ────────────────── */
 
-export * from './adapters/index.js';
 export * from './multi/index.js';
 export * from './security/index.js';
 

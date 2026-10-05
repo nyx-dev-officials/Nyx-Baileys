@@ -100,15 +100,66 @@ test('a list message is built and relayed rather than rejected', async () => {
   assert.equal(sock.__interactive.stats().sent, 1);
 });
 
-test('a buttons message is relayed with its buttons intact', async () => {
+/**
+ * Dig the native flow out of a relayed message.
+ *
+ * The envelope is `viewOnceMessage.message.interactiveMessage`, and the flow
+ * buttons live on its `nativeFlowMessage`. A plain `message.buttonsMessage` would
+ * mean the legacy shape leaked through unconverted — which is the bug this file
+ * exists to catch.
+ */
+function flowOf(message) {
+  const interactive = message?.viewOnceMessage?.message?.interactiveMessage;
+  assert(interactive, `no interactiveMessage in the envelope: ${JSON.stringify(message)}`);
+  const buttons = interactive.nativeFlowMessage?.buttons;
+  assert(Array.isArray(buttons), `no nativeFlowMessage.buttons: ${JSON.stringify(interactive)}`);
+  return { interactive, buttons };
+}
+
+test('a buttons message becomes a quick_reply flow with its buttons intact', async () => {
   const { sock, relayed } = rig();
 
   await sock.sendMessage(GROUP, BUTTONS);
 
-  const inner = relayed[0].message;
-  const buttons = inner.buttonsMessage?.buttons;
-  assert(Array.isArray(buttons) && buttons.length === 1, `buttons lost: ${JSON.stringify(inner)}`);
-  assert.equal(buttons[0].buttonId ?? buttons[0].buttonText?.displayText, 'y', 'button content lost');
+  const { interactive, buttons } = flowOf(relayed[0].message);
+  assert.equal(buttons.length, 1, `buttons lost: ${JSON.stringify(interactive)}`);
+  assert.equal(buttons[0].name, 'quick_reply');
+
+  // The original text and id must survive the JSON round-trip.
+  const params = JSON.parse(buttons[0].buttonParamsJson);
+  assert.equal(params.display_text, 'Yes');
+  assert.equal(params.id, 'y');
+  assert.equal(interactive.body?.text, 'C');
+});
+
+test('a bare-string buttonText is accepted, not dropped', async () => {
+  const { sock, relayed } = rig();
+
+  // Callers reasonably pass a string; the proto wants a nested message. Both
+  // must work, because the alternative is a silently button-less message.
+  await sock.sendMessage(GROUP, {
+    buttonsMessage: { contentText: 'C', buttons: [{ buttonId: 'z', buttonText: 'Plain' }] },
+  });
+
+  const { buttons } = flowOf(relayed[0].message);
+  const params = JSON.parse(buttons[0].buttonParamsJson);
+  assert.equal(params.display_text, 'Plain');
+  assert.equal(params.id, 'z');
+});
+
+test('a list becomes a single_select flow carrying its sections', async () => {
+  const { sock, relayed } = rig();
+
+  await sock.sendMessage(GROUP, LIST);
+
+  const { interactive, buttons } = flowOf(relayed[0].message);
+  assert.equal(buttons.length, 1);
+  assert.equal(buttons[0].name, 'single_select');
+
+  const params = JSON.parse(buttons[0].buttonParamsJson);
+  assert.equal(params.sections.length, 1, 'sections lost');
+  assert.equal(params.sections[0].rows[0].rowId, 'c', 'row ids lost');
+  assert.equal(params.sections[0].rows[0].title, 'Call Button');
 });
 
 test('the message is keyed to the chat and marked as ours', async () => {
@@ -121,7 +172,53 @@ test('the message is keyed to the chat and marked as ours', async () => {
   assert.equal(result.key.remoteJid, GROUP, 'keyed to the chat it was sent to');
   assert.equal(result.key.fromMe, true, 'an outgoing message must be marked fromMe');
   assert.equal(relayed[0].opts.messageId, result.key.id, 'the id sent is the id returned');
-  assert(relayed[0].message.listMessage, 'the inner message carries the content, not a wrapper');
+  assert(relayed[0].message.viewOnceMessage, 'the inner message is wrapped, not bare');
+});
+
+/* ── the stanza nodes, without which nothing renders ─────────────────── */
+
+test('a 1:1 chat carries biz_bot, because consumer clients need it', async () => {
+  const { sock, relayed } = rig();
+  await sock.sendMessage(pn(5), BUTTONS);
+
+  const tags = relayed[0].opts.additionalNodes.map((n) => n.tag);
+  assert(tags.includes('biz'), 'the biz node is required');
+  assert(tags.includes('bot'), 'bot is required for 1:1 chats');
+  assert.equal(relayed[0].opts.additionalNodes.at(-1).attrs.biz_bot, '1');
+});
+
+test('a group chat omits bot, which is 1:1 only', async () => {
+  const { sock, relayed } = rig();
+  await sock.sendMessage(GROUP, BUTTONS);
+
+  const tags = relayed[0].opts.additionalNodes.map((n) => n.tag);
+  assert(tags.includes('biz'));
+  assert(!tags.includes('bot'), 'bot must not be sent to a group');
+});
+
+test('the native_flow name matches the flow actually being sent', async () => {
+  const { sock, relayed } = rig();
+
+  await sock.sendMessage(GROUP, LIST);
+  await sock.sendMessage(GROUP, BUTTONS);
+
+  const flowName = (entry) =>
+    entry.opts.additionalNodes[0].content[0].content[0].attrs.name;
+  assert.equal(flowName(relayed[0]), 'single_select', 'a list is a single_select');
+  assert.equal(flowName(relayed[1]), 'quick_reply', 'buttons are a quick_reply');
+});
+
+test('the flow name can be overridden', async () => {
+  const sock = fakeSocket();
+  sock.user = { id: ME, lid: '999:9@lid' };
+  const relayed = [];
+  sock.relayMessage = async (jid, message, opts) => { relayed.push({ jid, message, opts }); };
+  applyPlugin(interactive({ flowName: 'cta_url' }), sock);
+
+  await sock.sendMessage(GROUP, BUTTONS);
+
+  const flow = relayed[0].opts.additionalNodes[0].content[0].content[0];
+  assert.equal(flow.attrs.name, 'cta_url', 'the override must reach the stanza');
 });
 
 test('every supported key routes through, not just lists', async () => {

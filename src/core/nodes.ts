@@ -1,4 +1,4 @@
-import { proto } from '@whiskeysockets/baileys';
+import { proto, type WAMessageKey } from '@whiskeysockets/baileys';
 
 /**
  * Protobuf node builders.
@@ -262,20 +262,36 @@ export function createAlbumContainer(count: number, videos = 0): WebMessageInfo 
 /**
  * Silent edit of an existing message.
  *
- * `editedMessage` is a `FutureProofMessage` wrapper — `{ message: { … } }` — not
- * a message with a `text` field. Passing `{ text }` makes protobufjs drop the
- * unknown key and the edit encodes to a 3-byte empty wrapper, which arrives at
- * the other end as an empty edit. The wrapper shape is what makes edits survive
- * future message-type additions.
+ * Returns **content for `sendMessage`**, not a prebuilt node — the edit is a
+ * wire-level protocol message, so it needs the target's key and Baileys wraps it
+ * itself.
+ *
+ * ```ts
+ * const original = await sock.sendMessage(jid, { text: 'before' });
+ * await sock.sendMessage(jid, createEdit(original.key, 'after'));
+ * ```
+ *
+ * Why the shape matters: rc14 compiles an edit in `generateWAMessageContent`
+ * (`Utils/messages.js:514`). When it sees an `edit` key it folds the message it
+ * just built into
+ *
+ * ```
+ * protocolMessage { key, editedMessage, timestampMs, type: MESSAGE_EDIT }
+ * ```
+ *
+ * Hand-building `editedMessage` instead looks plausible and is wrong. Measured
+ * on rc14: this form encodes to **15 bytes** carrying a `FutureProofMessage`
+ * wrapper with no `protocolMessage`, no target key and no edit type — so it
+ * carries no text *and* names nothing to edit. The `edit` form encodes to **71
+ * bytes** with `type: 14` (`MESSAGE_EDIT`), the real `parentMessageKey`, and the
+ * edited text intact. The short one is the silent failure.
+ *
+ * `proto.Message.FutureProofMessage.create` still looks like it should work
+ * because that type is a real wrapper — it just is not the wrapper an *outbound
+ * edit* travels in. `FutureProofMessage` is for `viewOnce` and ephemeral framing.
  */
-export function createEdit(text: string): WebMessageInfo {
-  return {
-    message: {
-      editedMessage: proto.Message.FutureProofMessage.create({
-        message: proto.Message.create({ conversation: text }),
-      }),
-    },
-  };
+export function createEdit(targetKey: WAMessageKey, text: string): { text: string; edit: WAMessageKey } {
+  return { text, edit: targetKey };
 }
 
 /**
