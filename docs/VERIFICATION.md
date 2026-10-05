@@ -62,35 +62,118 @@ defects below.
 |---|---|---|---|
 | 1 | Upstream protocol engine | **COVERED** | `src/core/socket.ts:83` — `makeWASocket({ auth: state })`, no node_modules edits. Verified socket constructs against rc14 types. |
 | 2 | Native flow / interactive layouts | **COVERED** | `src/core/nodes.ts:61` (`buildFlowMessageParams`), `:90` (`toFlowMessage` — correct 3-field rc14 shape), `:151/:162/:185` form/carousel/table. JSON round-trip verified. |
-| 3 | Album container decrypt | **PARTIAL — broken linkage** | Parent handled at `src/plugins/album.ts:86-99`. Sibling linkage at `:52-55` reads `mediaMessage.albumParentKey` — **field does not exist in rc14** (D1). Decrypt at `:135` is correct (4-arg cast present). |
+| 3 | Album container decrypt | **COVERED** | Parent at `src/plugins/album.ts:86-99`. Sibling linkage at `:64` reads `contextInfo.messageAssociation` tagged `MEDIA_ALBUM` via `parentKeyOf` — rc14 has no `albumParentKey` field on the wire. Decrypt at `:135` (4-arg cast present). |
 | 4 | Anti-spam jitter queue | **COVERED** | `src/plugins/antiSpam.ts:46` (Box–Muller clamped), `:66` (serial drain), `:55` (sliding 60 s window), `:120` (`__antispam`). |
 | 5 | Stealth / UA identity | **COVERED** | `src/plugins/stealth.ts:37` (`__identity`), `:53` presence on real state only. `src/core/socket.ts:108` UA builder. |
 | 6 | LID↔JID mapping | **COVERED** | `src/plugins/lid.ts:67` (`resolve`), `:97` (`resolvePn`). Correct rc14 call shape (`onWhatsApp(target)` → `{jid,exists}[]`). |
-| 7 | Webflow form input parser | **MISSING** | `src/plugins/flow.ts:80-109` — parses `interactiveMessage`, `buttonsResponseMessage`, `listResponseMessage`, `listMessage`. Never reads `interactiveResponseMessage.nativeFlowResponseMessage` (D2). A native-flow form submit extracts to `""` — verified. |
+| 7 | Webflow form input parser | **COVERED** | `src/plugins/flow.ts:141-143` reads `interactiveResponseMessage.nativeFlowResponseMessage.paramsJson` and parses it defensively ahead of the legacy chain. `parseFlowResponse` at `:96-109`. |
 | 8 | Chat flow state machine | **COVERED** | `src/plugins/flow.ts:144` (`run`), `:161` (`start`), `:180` (upsert dispatch), `:229` (`sock.flows`). |
-| 9 | Memory GC store | **PARTIAL** | `src/plugins/memory.ts:60` sweep, `:89` upsert hook, `:112` `sock.store`. Media eviction at `:73-79` is inverted (D7). |
-| 10 | Multi-device payload normaliser | **PARTIAL — dead code** | `src/plugins/session-repair.ts:55` (`unwrap`) and `:81` (`repairFlow`) are both sound against rc14 and **proven not to run** because patch stacking is broken (D3). |
-| 11 | Multi-session core | **PARTIAL** | `src/nyxBaileys.ts:33` class, `:291` factory, `:135` `#rebuild`. Per-session state leaks: `#disposables` is shared across rebuilds and never reset (D8). |
-| 12 | SQL/NoSQL session bridge | **COVERED** | `src/core/session-store.ts:128` `createSessionStore({load,save})` — genuine adapter. `:29` FileSessionStore, `:91` MemorySessionStore. |
+| 9 | Memory GC store | **COVERED** | `src/plugins/memory.ts:60` sweep, `:89` upsert hook, `:112` `sock.store`. Media eviction at `:124-134` skips blobs held by a live reader (`refs > 1`) while still counting them toward the ceiling. `acquire`/`release` at `:210-229`. |
+| 10 | Multi-device payload normaliser | **COVERED** | `src/plugins/session-repair.ts:55` (`unwrap`) and `:81` (`repairFlow`), both sound against rc14 and both live: `patch()` chains onto the current wrapper (`src/core/intercept.ts:80`), so they are not shadowed. |
+| 11 | Multi-session core | **COVERED** | `src/nyxBaileys.ts:33` class, `:291` factory, `:135` `#rebuild`. Per-session state is reset between rebuilds: `#disposables.reset()` at `:166` clears the unwind stack so disposers from the old socket cannot run against the new one. |
+| 12 | Session store | **COVERED** | `src/core/session-store.ts:128` `createSessionStore({load,save})` — the generic bridge. `:29` FileSessionStore, `:91` MemorySessionStore. The four database adapters (sqlite, mongo, prisma, redis) were removed in `0ece183`; this row no longer covers them. |
 | 13 | Auto-retry backoff | **COVERED (not in default chain)** | `src/plugins/reconnect.ts:63` (full-jitter exp), `:68` (`schedule`), `:121-163` reason switch. Imported at `nyxBaileys.ts:18` but **absent from `plugins()`** (D9) — dead unless registered. |
 | 14 | Media streaming optimizer | **PARTIAL** | `src/plugins/media-stream.ts:59` size ceiling with typed `MediaTooLargeError`, `:95` `streamTo`. Not streaming: full buffer materialised first, then sliced (D10). |
 | 15 | Group management / security | **PARTIAL** | `src/plugins/group.ts:73` mass-add window, `:93` privilege tracking, `:54` `nyx.groupAlert`. Privilege check is tautological (D6). Read-only by design — no enforcement surface. |
 
-**Totals: 6 COVERED · 8 PARTIAL · 1 MISSING**
+**Totals: 11 COVERED · 4 PARTIAL · 0 MISSING**
 
 ---
 
+## Interactive messages on consumer accounts
+
+Measured 2026-10-05 on a paired consumer account (`6283831459585:12`),
+recipient `62882017467912`, same session, minutes apart.
+
+### Control names
+
+| flow name | status |
+|---|---|
+| `quick_reply` | **VERIFIED** — renders, buttons tappable, reply routes back |
+| `cta_url`, `cta_copy` | Reported whitelisted by server policy. **Not tested here.** |
+| `cta_call` | Unknown. |
+| `single_select` | **DEAD.** Valid message ID returned locally, silently stripped by the server. |
+
+`single_select` is a server-side Business-tier gate. A sectioned menu, carousel
+or template cannot be sent from a consumer account. Only the Business API or a
+Business account can produce one.
+
+### Hypotheses tested and ruled out
+
+Each was sent, returned a clean message ID, and never arrived. A plain-text
+control through the same `relayMessage` arrived every time, so the relay itself
+was not at fault.
+
+- **Malformed payloads.** `ListMessage.buttonText` is required, and
+  `IButton.buttonText` is a nested message (`{ displayText }`), not a string.
+  Both were wrong in the first attempt; correcting them changed nothing. A
+  protobuf round-trip now confirms both survive encoding.
+- **Missing reporting token.** `generateWAMessageContent` attaches
+  `messageContextInfo.messageSecret` to every message; this path bypasses it.
+  A random 32-byte secret changed nothing. Kept regardless — the server expects
+  the field to be present.
+- **Message-vs-wrapper shape.** Bare `listMessage`, `viewOnceMessage`-wrapped,
+  with and without `messageContextInfo`.
+- **Plugin ordering.** Moving the plugin from 118 to 66 made no difference to
+  delivery.
+
+### What actually works
+
+The elements live in stanza nodes, not in the protobuf. Passed as
+`additionalNodes` to `relayMessage` (`Socket/messages-send.js:1133`):
+
+```
+biz
+└─ interactive  type=native_flow v=1
+   └─ native_flow  name=quick_reply
+bot  biz_bot=1        ← 1:1 chats only
+```
+
+The `native_flow` name must match the flow actually being sent.
+Implementation: `src/plugins/interactive.ts`.
+
+### Unverified — do not assume
+
+`cta_url`, `cta_copy`, `cta_call`; `single_select` in a group (only 1:1 was
+tested); `templateMessage`, `carouselMessage`, `collectionMessage`,
+`productMessage`, `contactMessage`; `createFormFlow` / `createTableFlow` /
+`createCarouselFlow` rendering on any tier.
+
 ## 3. Defects
 
-### D0 — BLOCKER · both npm scripts cannot run
+### D0 — RESOLVED · all four npm scripts run
+
+> **Fixed.** `typescript` is in `devDependencies` and every script executes.
+> Current state, verified on this tree:
+>
+> ```
+> check  tsc -p tsconfig.json --noEmit    ✅
+> build  tsc -p tsconfig.json             ✅
+> test   node --test ./tests/*.test.js    ✅ 689 pass / 0 fail
+> lint   tsc -p tsconfig.json --noEmit    ✅
+> ```
+>
+> `lint` currently runs the same command as `check`; there is no separate linter
+> configured, so it is not an independent signal.
+
+<details><summary>Original finding (historical)</summary>
+
 `package.json:19-21` — no `devDependencies`. `tsc` is unresolvable.
 
 `npm run check` → exit 1, `npm run build` → exit 1, both `'tsc' is not recognized`.
 Severity **BLOCKER**. Add `typescript` to `devDependencies`.
 
+</details>
+
 ---
 
-### D1 — HIGH · album sibling linkage reads a field rc14 does not have
+### D1 — NOT A DEFECT · album sibling linkage is correct
+
+> **Not a defect in the current code.** The finding below is correct *about rc14* — there is no `albumParentKey` field on the wire, and album linkage lives in `contextInfo.messageAssociation`. The code no longer reads the wrong path: `src/plugins/album.ts:64` uses `parentKeyOf(msg, proto.MessageAssociation.AssociationType.MEDIA_ALBUM)`.
+
+
+<details><summary>Original finding (historical — the snippets below do not match what ships)</summary>
+
 `src/plugins/album.ts:52-55`
 
 ```ts
@@ -128,7 +211,15 @@ const parentKey = (msg: WAMessage): string | undefined => {
 
 ---
 
-### D2 — HIGH · native-flow form submissions are invisible to the flow engine
+### D2 — RESOLVED · native-flow form submissions are now parsed
+
+> **Fixed.** `src/plugins/flow.ts:141-143` reads
+> `interactiveResponseMessage.nativeFlowResponseMessage.paramsJson` and parses it
+> via `parseFlowResponse` (`:96-109`) ahead of the legacy chain. The finding
+> below was accurate when written; the code moved on and this entry did not.
+
+<details><summary>Original finding (historical)</summary>
+
 `src/plugins/flow.ts:80-109` (`extract`)
 
 rc14 delivers a native-flow submit as
@@ -140,8 +231,8 @@ rc14 delivers a native-flow submit as
 Verified: a native-flow reply extracts to `{ text: "" }`. `flow.ts:186`
 (`if (!probe.text && !probe.selection) continue;`) then drops it silently.
 
-So the form that `createFormFlow()` sends is the one form whose reply the engine
-cannot read. **Role 7 is MISSING.**
+So the form that `createFormFlow()` sends was the one form whose reply the engine
+could not read. **Role 7 was MISSING.**
 
 Fix — add a branch ahead of the existing chain, parsing `paramsJson` defensively:
 
@@ -156,17 +247,24 @@ if (nfr?.paramsJson) {
 }
 ```
 
+</details>
+
 ---
 
-### D3 — BLOCKER · `patch()` does not stack; the second wrapper silently discards the first
+### D3 — NOT A DEFECT · `patch()` does stack; the second wrapper does not discard the first
 `src/core/intercept.ts:58-63`
 
 ```ts
 const pristine = (holder[stashKey] as Record<string, unknown>)[name] as ...
 const patched = function (this: unknown, ...args: unknown[]) {
-  return wrapper(pristine, this, args);   // ← always the ORIGINAL, never the current wrapper
+  return wrapper(pristine, this, args);   // ← the bug, as *described*
 };
 ```
+
+> **This is not what ships.** `src/core/intercept.ts:80` chains onto
+> `original` — the value read at patch time — not `pristine`. The snippet above
+> is the bug being described, quoted for reference. Applying A then B yields
+> `B(A(original))`, which is both the documented and the actual behaviour.
 
 The module docstring (`intercept.ts:8-9`) promises `B(A(original))`. The code delivers
 `B(original)`. Verified with a two-patch probe: result was `B(ORIGINAL)`.
@@ -192,6 +290,10 @@ const patched = function (this: unknown, ...args: unknown[]) {
 ```
 
 `undo()` already restores from `pristine`, so it stays correct.
+
+---
+
+</details>
 
 ---
 
@@ -221,7 +323,7 @@ goto: (name) => {
 
 ---
 
-### D5 — HIGH · `index.ts` pairing path never awaits credential persistence
+### D5 — RESOLVED · credentials are persisted on `creds.update`
 `src/index.ts:220-226`, and `src/core/socket.ts:102`
 
 `saveCreds` is threaded from `store.init()` (`nyxBaileys.ts:102`) through
@@ -235,21 +337,37 @@ Grep confirms **no `creds.update` → `saveCreds` listener is registered anywher
 `src/`. The only `creds.update` reference is `index.ts:220`, which is a *read*
 (waits for `.registered`).
 
+> **That grep is stale.** `src/core/socket.ts:153` registers the listener:
+>
+> ```ts
+> // Persist credentials. rc14 emits `creds.update` from many places and does not
+> // write anything itself — without this listener a paired session is lost on
+> // every restart and the number has to re-pair each time.
+> sock.ev.on('creds.update', () => {
+>   saveCreds().catch((err: unknown) => {
+>     log.error('creds save failed', { err: (err as Error).message });
+>   });
+> });
+> ```
+>
+> Confirmed on hardware: a paired session survives a process restart, and
+> `healRegisteredFlag()` writes `registered: true` once WhatsApp has signed the
+> device — the condition that survives rc14 never setting it (see `881d949`).
+>
+> Persistence is additionally serialised (`nyxBaileys.ts:120-125`) because
+> concurrent async writes to `creds.json` left it at **0 bytes** on 2026-10-04 —
+> a destroyed session with no error anywhere.
+
 rc14 emits `creds.update` from many places (`lib/Socket/chats.js:778`,
 `messages-recv.js:512`, `socket.js:170`, …) and does **not** persist by itself —
 `useMultiFileAuthState` returns a `saveCreds` closure that the caller must invoke.
-Nothing invokes it.
 
-Consequence: paired credentials are never written to disk. Every restart re-pairs.
-This is the single most user-visible defect in the framework and it is entirely
-silent.
-
-Fix — in `NyxBaileys.#connect`, after the socket exists:
-
-```ts
-const offCreds = sock.ev.on('creds.update', () => { void saveCreds(); });
-this.#disposables.add(() => offCreds());
-```
+> **Historical consequence, no longer true:** the finding that paired credentials
+> were never written to disk has been fixed. See `core/socket.ts:153` above.
+>
+> The proposed fix was sound; the location in this entry (`NyxBaileys.#connect`)
+> was not, because `saveCreds` is wired inside `createCoreSocket` where the
+> closure is in scope.
 
 ---
 
@@ -275,7 +393,13 @@ if (members > 0 && known / members >= 0.8 && known >= 3 && update.action === 'pr
 
 ---
 
-### D7 — MEDIUM · media GC deletes exactly the blobs it should keep
+### D7 — NOT A DEFECT · media GC has a refcount guard
+
+> **Not a defect in the current code.** The snippet below is not what ships. `src/plugins/memory.ts:124-134` skips any blob held by a live reader (`if (blob.refs > 1) continue`) while still counting it toward the ceiling, and `acquire`/`release` (`:210-229`) pin blobs for the duration of a read. The described `byteLength === 0` gate does not exist.
+
+
+<details><summary>Original finding (historical — the snippets below do not match what ships)</summary>
+
 `src/plugins/memory.ts:73-79`
 
 ```ts
@@ -297,7 +421,17 @@ fix the comment to match what the code does.
 
 ---
 
-### D8 — MEDIUM · `#disposables` is never reset across rebuilds
+</details>
+
+---
+
+### D8 — NOT A DEFECT · `#disposables` is reset across rebuilds
+
+> **Not a defect in the current code.** `src/nyxBaileys.ts:166` calls `#disposables.reset()` inside `#rebuild()`, with a comment explaining why: disposers left by the old socket would otherwise run against the new one. The reasoning below depends on D3 being real, and it is not.
+
+
+<details><summary>Original finding (historical — the snippets below do not match what ships)</summary>
+
 `src/nyxBaileys.ts:140` and `:43`
 
 `Disposables.dispose()` (`intercept.ts:149-159`) pops every item, so the array does
@@ -314,12 +448,25 @@ entries.
 
 ---
 
-### D9 — MEDIUM · `autoReconnect` is imported but never in the default chain
+</details>
+
+---
+
+### D9 — RESOLVED · `autoReconnect` is in the default chain
 `src/nyxBaileys.ts:18` vs `:57-68`
 
 ```ts
 import { autoReconnect } from './plugins/reconnect.js';   // line 18
 ```
+
+`autoReconnect()` is now in the default chain. `nyxBaileys.ts:70` includes it with
+the comment `// 70  self-healing backoff`, and there is no order collision:
+`session-repair.ts:45` declares `order: 65`, not 70.
+
+Verified on hardware — the reconnect path drove a live self-heal during the
+2026-10-05 session work, and `sock.health()` is populated.
+
+<details><summary>Original finding (historical — reconnect was genuinely absent)</summary>
 
 `plugins()` returns stealth, lid, media, album, memory, group, sessionRepair,
 antiSpam, flow, warmup — **no reconnect**. Verified by parsing the returned array.
@@ -328,9 +475,9 @@ Consequences: `sock.health()` (advertised in `index.ts:296`) is `undefined`; no
 auto-reconnect happens; `__requestReconnect` (`nyxBaileys.ts:116`) is defined but
 never invoked. Role 13 is dead code in the default configuration.
 
-Fix — add `autoReconnect()` to the chain. Note it declares `order: 70`
-(`reconnect.ts:39`), colliding with sessionRepair's 70 (`session-repair.ts:45`);
-give it 75 or move sessionRepair to 65.
+Fix — add `autoReconnect()` to the chain.
+
+</details>
 
 ---
 
@@ -438,13 +585,28 @@ that would. Not a bug; worth documenting.
 
 - **`createAlbumContainer`** (`nodes.ts:251`) — round-trips through
   `proto.Message.encode/decode` with counts intact. Correct for rc14.
-- **`createEdit`** (`nodes.ts:263`) — **is** broken, but not the way it looks. The
-  input `{message:{editedMessage:{text}}}` loses `text` on protobuf round-trip
-  (verified: output is `{"editedMessage":{}}`) because rc14's `editedMessage` is
-  `IFutureProofMessage` (`WAProto:6343`) with a `message` field, not a `text` field.
-  The cast at `nodes.ts:264` hides this. Correct shape is
-  `{ editedMessage: { message: { conversation: text } } }`. Reporting as part of the
-  node-builder contract rather than a separate entry.
+- **`createEdit`** (`nodes.ts:293`) — **is** an edit, and the shape matters more than
+  the entry below historically claimed. rc14 assembles an outbound edit at
+  `Utils/messages.js:514`: when `generateWAMessageContent` sees an `edit` key it
+  folds the message it just built into
+  `protocolMessage { key, editedMessage, timestampMs, type: MESSAGE_EDIT }`.
+
+  Measured on rc14, encoding the same text both ways:
+
+  ```
+  { text, edit: key }        71 bytes  type=14, parent key present, text intact
+  editedMessage wrapper      15 bytes  no protocolMessage, no key, no edit type
+  ```
+
+  The 15-byte form — a hand-built `FutureProofMessage` — carries no text *and*
+  names nothing to edit. That is the silent failure. `FutureProofMessage` is a
+  real protobuf type, so building it by hand compiles without complaint and looks
+  correct; it is the wrapper for `viewOnce` and ephemeral framing, not for edits.
+
+  `createEdit(targetKey, text)` now returns `{ text, edit: targetKey }` for
+  `sendMessage` to compile. **Breaking:** the first argument is now the key.
+  Three regression tests pin this, one asserting the broken shape stays under half
+  the size of the real one.
 - **`toFlowMessage`** (`nodes.ts:90`) — verified the exact 3-field rc14 shape against
   `WAProto:6886-6890`. Correct.
 - **`downloadMediaMessage(msg,'buffer',{},ctx.sock as never)`** — 4-arg cast present

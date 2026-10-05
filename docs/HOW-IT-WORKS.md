@@ -159,12 +159,16 @@ which throws `Boom: Invalid media type` for anything unrecognised:
 | `image` · `video` · `audio` · `document` · `sticker` | works |
 | `poll` · `album` · `contacts` · `location` · `react` | works |
 | `listReply` · `event` · `pin` · `buttonReply` | works |
-| **`listMessage`** | **throws `Invalid media type`** |
-| **`buttonsMessage`** | **throws `Invalid media type`** |
-| **`templateMessage`** | **throws `Invalid media type`** |
-| **`interactiveMessage`** | **throws `Invalid media type`** |
+| **`listMessage`** | throws upstream; `interactive` plugin intercepts first |
+| **`buttonsMessage`** | throws upstream; `interactive` plugin intercepts first |
+| **`templateMessage`** | throws upstream; plugin intercepts, server drops it |
+| **`interactiveMessage`** | throws upstream; `interactive` plugin intercepts first |
 
-**The workaround that does not work.** `sendMessage` ends by calling
+Register the plugin and you do not see a crash — the `Boom: Invalid media type`
+never reaches your code. What happens next depends on the flow name; see the
+platform table at the end of this section.
+
+**The first workaround, which also did not work.** `sendMessage` ends by calling
 `relayMessage`, which *is* public, and `generateWAMessageFromContent` skips the
 broken chain. Build the inner message, wrap it, relay it — and it **returns a
 plausible message ID, resolves without error, and delivers nothing**:
@@ -207,7 +211,7 @@ const form = createFormFlow({
 | `createCarouselFlow` | swipeable cards | `core/nodes.ts:162` |
 | `carouselCardWithMedia` | a carousel card carrying media | `core/nodes.ts:214` |
 | `createAlbumContainer` | album parent for N media | `core/nodes.ts:251` |
-| `createEdit` | an edit wrapper | `core/nodes.ts:271` |
+| `createEdit(targetKey, text)` | `{ text, edit }` for `sendMessage` to compile | `core/nodes.ts:293` |
 
 `nyx-baileys form` now **fails with an accurate message** rather than surfacing a
 Boom that names neither cause nor workaround.
@@ -238,25 +242,70 @@ proto.Message.TemplateMessage.create({
 });
 ```
 
-**Consumer vs Business.** This is independent of the blocker above, and it matters
-even once sending is fixed:
+**Platform reality, measured.** Sent from a paired consumer account
+(`6283831459585:12`), same recipient, same session, minutes apart. Phone
+screenshots, not return values:
 
-| Type | Consumer WhatsApp | WhatsApp Business |
+| Flow | Consumer WhatsApp | Status here |
 |---|---|---|
-| `listMessage` | renders | renders |
-| `buttonsMessage` (quick reply) | renders | renders |
-| `templateMessage` / hydrated | **no** | renders |
-| `nativeFlowMessage` (flows) | **no** | renders |
+| `quick_reply` buttons | renders, buttons tappable, reply routes back | **VERIFIED** |
+| `cta_url`, `cta_copy` | whitelisted by server policy | not tested |
+| `cta_call` | unknown | not tested |
+| `single_select` (sectioned list) | **never arrives** | **DEAD** |
+| `templateMessage` / hydrated | never arrives | not tested |
+| carousels, collections, products | never arrive | not tested |
 
-So "it shows on web but not on mobile" has **two** independent causes, and only one
-is a code problem.
+A sectioned menu cannot be sent from a consumer account. That is a server-side
+Business-tier gate: the encoder accepts `single_select`, the server accepts the
+stanza, then strips the interactive node in transit. `relayMessage` has already
+resolved by then, which is the whole shape of the phantom delivery. Only the
+Business API or a Business account produces one.
 
-**The fix, if you want it.** This framework decorates the socket at runtime and
-never edits `node_modules`, so the intended route is a plugin that patches
-`sock.sendMessage`: detect an unrecognised content key, build with
-`generateWAMessageFromContent`, then **mirror `sendMessage`'s tail** rather than
-calling `relayMessage` directly. The open question is precisely which part of that
-tail `relayMessage` alone is missing.
+So "it does not show on mobile" has **two** independent causes, and only one is a
+code problem.
+
+**The fix, which exists.** The elements live in stanza nodes, not in the
+protobuf. Pass them to `relayMessage` as `additionalNodes`
+(`Socket/messages-send.js:1133`):
+
+```
+biz
+└─ interactive  type=native_flow v=1
+   └─ native_flow  name=quick_reply
+bot  biz_bot=1        ← 1:1 chats only
+```
+
+The `native_flow` name must match the flow actually being sent. `bot` is 1:1
+only and is required there, or consumer clients will not render the flow.
+
+Shipped as the `interactive` plugin — opt-in, so register it:
+
+```ts
+import { createNyxBaileys } from 'nyx-baileys';
+import { interactive } from 'nyx-baileys/plugins';
+
+const client = createNyxBaileys({ sessionDir: './session' });
+client.registerPlugin(interactive());
+await client.connect();
+
+await client.sock.sendMessage(jid, {
+  buttonsMessage: {
+    contentText: 'Pick one',
+    buttons: [
+      { buttonId: 'yes', buttonText: 'Yes' },
+      { buttonId: 'no',  buttonText: { displayText: 'No' } },   // both forms accepted
+    ],
+  },
+});
+```
+
+It converts `buttonsMessage` and `listMessage` into native flows, because
+neither is an `InteractiveMessage` shape — passing either to
+`InteractiveMessage.fromObject` does not throw, it silently discards every
+field. Intercepts at order 66, above `session-repair` and below every pacing
+wrapper, so an interactive send cannot be delayed or swallowed by a queue that
+does not understand it. `src/plugins/interactive.ts` is the reference
+implementation and documents the ruled-out causes.
 
 ---
 
@@ -489,14 +538,20 @@ not a claim that it works.
 import { FileSessionStore, MemorySessionStore, createSessionStore } from 'nyx-baileys';
 
 const client = createNyxBaileys({
-  sessionDir: './session',                       // FileSessionStore by default
-  sessionStore: new SqliteSessionStore({ /* … */ }),
+  sessionDir: './session',        // FileSessionStore by default
+  sessionStore: new MemorySessionStore(),
 });
 ```
 
-Also shipped: `MongoSessionStore`, `PrismaSessionStore`, `RedisSessionStore`, and
-`createSessionStore({ load, save })` for anything else —
-`core/session-store.ts:128`.
+For anything else, wrap a load/save pair — `core/session-store.ts:128`:
+
+```ts
+createSessionStore({ load, save })   // sync or async
+```
+
+The four database adapters (sqlite, mongo, prisma, redis) were **removed** in
+`0ece183`. Nothing outside `src/adapters/` imported them. Implement `SessionStore`
+yourself if you need one; the interface is the whole contract.
 
 **One durability rule worth knowing.** Credentials are persisted with an async
 `writeFile`, which truncates before it writes. `NyxBaileys` serialises those saves

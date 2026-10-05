@@ -4,6 +4,102 @@ All notable changes to `nyx-baileys`. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 semantic versioning with a `0.x` line.
 
+## [Unreleased]
+
+### Breaking
+
+- **`createEdit` signature changed.** `createEdit(text)` returned a
+  `FutureProofMessage` wrapper that encoded to **15 bytes** with no
+  `protocolMessage`, no target key and no edit type — it carried no text and named
+  nothing to edit. rc14 assembles an outbound edit at `Utils/messages.js:514` when
+  it sees an `edit` key, so the correct form is `{ text, edit: targetKey }`.
+
+  ```ts
+  // before — silent no-op
+  const node = createEdit('after');
+
+  // after
+  const original = await sock.sendMessage(jid, { text: 'before' });
+  await sock.sendMessage(jid, createEdit(original.key, 'after'));
+  ```
+
+  Callers of the old form now receive `undefined` as the target key rather than a
+  compile error. The 71-byte real form carries `type: 14` (`MESSAGE_EDIT`), the
+  parent key and the text.
+
+  Note for anyone who "fixed" this before: a hand-built `FutureProofMessage` is a
+  genuine protobuf type, so it compiles without complaint and looks correct. It is
+  the wrapper for `viewOnce` and ephemeral framing, not for edits.
+
+- **`adapters/` removed.** `sqlite`, `mongo`, `prisma` and `redis` session stores
+  are gone — 1,472 lines. Nothing outside `src/adapters/` imported them, verified
+  before deletion. `src/index.ts` no longer re-exports them and `package.json` no
+  longer maps `./adapters` or `./adapters/*`. The export surface is 22 targets.
+  Implement `SessionStore` directly if you need one.
+
+### Added
+
+- **`interactive` plugin — interactive messages that actually arrive.**
+  `listMessage`, `buttonsMessage`, `templateMessage` and `interactiveMessage` are
+  rejected by rc14's `generateWAMessageContent` with `Boom: Invalid media type`.
+  Routing around that is not enough on its own: `generateWAMessageFromContent` +
+  `relayMessage` returns a clean message ID, resolves without error, and delivers
+  nothing. The elements live in stanza nodes, and those must be passed to
+  `relayMessage` as `additionalNodes`:
+
+  ```
+  biz
+  └─ interactive  type=native_flow v=1
+     └─ native_flow  name=quick_reply
+  bot  biz_bot=1        ← 1:1 chats only
+  ```
+
+  Verified on a paired consumer account: quick-reply buttons render, are tappable,
+  and their replies route back. The `native_flow` name must match the flow sent.
+  Intercepts at order 66 — above `session-repair` (65), below every pacing wrapper
+  — so an interactive send cannot be delayed or swallowed by a queue that does not
+  understand it.
+
+  `toInteractiveInner()` converts `buttonsMessage` and `listMessage` into native
+  flows, because neither is an `InteractiveMessage` shape. Passing either to
+  `InteractiveMessage.fromObject` does not throw; it silently discards every field.
+  A bare-string `buttonText` is accepted alongside the nested `{ displayText }`.
+
+- **`healRegisteredFlag()`.** rc14 sets `registered` in exactly one place — the
+  `companion_finish` branch of `messages-recv.js:940` — and that notification does
+  not arrive on this path, so a correctly paired session still reports itself
+  unpaired and every socket-dependent command refuses it. `pair` now corrects the
+  flag on disk once the device is genuinely provisioned. A fresh session has no
+  `me.id` and no `account.deviceSignature`, so the heal cannot fire on one.
+
+### Fixed
+
+- **Pairing CLI defects** — readiness is a `qr` update, not `connection === 'open'`;
+  a half-finished session is detected and reported before any network call instead of
+  three silent 401s; `creds.json` writes are serialised, because concurrent async
+  writes truncated it to 0 bytes and destroyed a paired session.
+- **Credential persistence** — `core/socket.ts` registers the `creds.update`
+  listener. rc14 emits that event from many places and persists nothing itself.
+- **Three awaited timers were `unref()`'d** in `queue.ts`, `album.ts` and
+  `antiban.ts`, so their backoff timers never fired. Covered by isolated
+  child-process regression tests.
+
+### Known limitations
+
+- **Sectioned lists do not work on consumer accounts.** `single_select` returns a
+  valid message ID and is silently stripped by the server — a Business-tier gate,
+  not a payload problem. The encoder accepts it, the server accepts the stanza, then
+  deletes the interactive node in transit. Ruled out by live differential:
+  malformed payloads (`ListMessage.buttonText` required, `IButton.buttonText` a
+  nested message), a missing `messageSecret` reporting token, message-vs-wrapper
+  shape, and plugin ordering. Only the Business API or a Business account produces
+  a sectioned menu.
+- **`cta_url`, `cta_copy` and `cta_call` are unverified** on consumer accounts.
+  Reported whitelisted by server policy; not tested here.
+
+689 tests, up from 538.
+
+---
 ## [0.2.0] — 2026-10-04
 
 Base commit `5d041e6`. This release is **the pairing repair**. Eight defects,

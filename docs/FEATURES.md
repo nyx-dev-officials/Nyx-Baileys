@@ -13,7 +13,6 @@ Every entry is a **name**, a **one-sentence description**, a **layer**, and a
 | `core` | The interception primitive, the socket, protobuf builders, media traversal, session stores |
 | `plugins` | The 11 default plugins plus `metrics` |
 | `utils` | Text composition, logging, shared types |
-| `adapters` | `SessionStore` implementations (SQLite/Mongo/Prisma/Redis) |
 | `multi` | One process, N accounts |
 | `cli` | Argument parsing and output |
 | `security` | Validation, redaction, permissions, ACL, audit |
@@ -379,20 +378,6 @@ Every symbol below is in `nyx-baileys/lite` and pulls **no** engine. See
 | 162 | Tamper-evidence honesty | `security` | Without a key the chain is tamper-*evident* only; with one it needs a second secret to forge. Truncation is not detectable — ship off-host. `security/audit.ts:18-33` |
 | 163 | Sink + plugin form | `security` | `AuditSink`, `silentAuditSink`, `auditSink(log)` and an `auditTrail()` plugin. `security/audit.ts:553-582` |
 
-## adapters (9)
-
-| # | Name | Layer | What it does |
-|---|---|---|---|
-| 164 | Driver-free by construction | `adapters` | No adapter imports a database driver; each declares the narrow client surface and you supply the client, so no peer dependency is forced. `adapters/index.ts:16-19` |
-| 165 | `SqliteSessionStore` | `adapters` | Injected persistence function rather than a database — the store serialises to a string and hands it over. `adapters/session-sqlite.ts:239` |
-| 166 | Atomic write + fsync | `adapters` | Temp file, fsync, then `rename` over the target; a truncated auth file is an unrecoverable session. `adapters/session-sqlite.ts:20-32` |
-| 167 | `MongoSessionStore` | `adapters` | Creds as one document, Signal keys one document per `(sessionId, type, keyId)` — the key store grows for the life of the account and a blob hits the 16 MB BSON limit. `adapters/session-mongo.ts:16-30` |
-| 168 | Native BSON values | `adapters` | Key material stored as `Uint8Array`, not JSON-encoded: a 32-byte Signal key stays 32 bytes instead of ~48. `adapters/session-mongo.ts:26-28` |
-| 169 | `PrismaSessionStore` | `adapters` | Two models against a structurally-typed client, so `@prisma/client` stays a peer concern and Drizzle/Knex remain swappable. `adapters/session-prisma.ts:9-11` |
-| 170 | `BufferJSON` round-trip | `adapters` | Encodes with Baileys' `BufferJSON` replacer; plain `JSON.stringify` turns a 32-byte key into `{"0":1,…}` and silently desyncs the ratchet. `adapters/session-prisma.ts:29-33` |
-| 171 | `RedisSessionStore` | `adapters` | The L1 cache layer in front of a durable store — a credential fetch on reconnect is one O(1) round trip. `adapters/session-redis.ts:13-17` |
-| 172 | Epoch-prefix invalidation | `adapters` | Logout bumps a per-session generation prefix so every pre-key row is invalidated without a `KEYS` scan or variadic `DEL`. `adapters/session-redis.ts:19-30` |
-
 ## multi (7)
 
 | # | Name | Layer | What it does |
@@ -424,19 +409,21 @@ Every symbol below is in `nyx-baileys/lite` and pulls **no** engine. See
 | 187 | Extension over `any` cast | `core` | Anything that cannot be a runtime wrapper lives behind a non-enumerable extension interface instead of an `any` cast. `utils/types.ts:5-11` |
 | 188 | `Plugin` / `PluginContext` / `Wrapper` | `core` | The three types a plugin author needs, and no more. `utils/types.ts:16-38` |
 | 189 | `SuperOptions` | `core` | Session dir/store, browser tuple, anti-spam, warm-up days, log level, QR printing, per-JID id. `utils/types.ts:60-82` |
-| 190 | Public surface and demo | `core` | 51 exports plus a `main()` exercising identity, a paced send, and three native-flow layouts. `index.ts:24-58`, `:187` |
+| 190 | Public surface and demo | `core` | 22 export targets plus a `main()` exercising identity, a paced send, and three native-flow layouts. `index.ts`, `scripts/check-exports.mjs` |
 
-**Tier 1 total: 190.**
-
-> The numbering runs to 190 because the `security/`, `adapters/`, `multi/`,
-> `cli/` and `metrics` layers are real implemented surface, not aspirations. Every
-> one is in `tsconfig.json`'s `include`, so it compiles as part of the package.
-> Two caveats apply to all of entries 112–185: **`src/index.ts` does not
-> re-export them** (it exports 51 core/plugins/utils names), and **`package.json`
-> `exports` does not map them** — the map is `.`, `./core/*`, `./plugins/*`,
-> `./utils/*` only. So they are reachable by deep relative import from `dist/`
-> but not by the `nyx-baileys/adapters/…` specifier their own docstrings
-> advertise. Both are one-line fixes in files this pass does not own.
+> The numbering runs to 190 because the `security/`, `multi/`, `cli/` and
+> `metrics` layers are real implemented surface, not aspirations. Every one is in
+> `tsconfig.json`'s `include`, and all of them are now exported: `src/index.ts`
+> re-exports the root, plugin, util, multi, security, integrations, antiban and CLI
+> layers, and `package.json` maps `./multi/*`, `./security`, `./cli/*` and the
+> rest. The surface is **22 targets**, all resolving
+> (`node scripts/check-exports.mjs`).
+>
+> The `adapters/` layer (entries 164-172) has been **removed** — the four database
+> stores were deleted in `0ece183`, 1,472 lines, with nothing outside
+> `src/adapters/` importing them. Those numbers are gone from the tables but the
+> surrounding numbering is intentionally unrenumbered, so the sequence still runs to
+> 190 with gaps where those rows were.
 >
 > Ten further plugins are implemented and compiled but **opt-in** — none is in
 > `plugins()`, so each needs `registerPlugin()`: `metrics` (110),
@@ -475,7 +462,7 @@ coverage matrix — 8 PARTIAL and 1 MISSING at the time of that review.
 
 | # | Name | Layer | Design decision that matters | Effort |
 |---|---|---|---|---|
-| 201 | Five control names | `core` | `quick_reply`, `cta_copy`, `cta_url`, `cta_call`, `single_select`, discriminated by which shorthand key is present on the button. `REF-FINDINGS` T1 | M |
+| 201 | Five control names | `core` | `quick_reply`, `cta_copy`, `cta_url`, `cta_call`, `single_select`, discriminated by which shorthand key is present on the button. **Measured on a consumer account 2026-10-05: `quick_reply` renders and its reply routes back; `single_select` returns a valid ID and never arrives (server-side Business-tier gate); `cta_url`/`cta_copy`/`cta_call` not tested.** `REF-FINDINGS` T1 | M |
 | 202 | `merchant_url` mandatory | `core` | Omitting it yields a `cta_url` that renders but does not open. Make it non-optional in the type for url buttons. `T1` | S |
 | 203 | Icon name upper-casing | `core` | The WA enum is upper-case; passing a lower-case shorthand through silently drops the icon. `String(icon).toUpperCase()` at serialisation. `T1` | S |
 | 204 | `limited_time_offer` | `core` | A parent-level control in the container's `messageParamsJson`, gated on `offerText`, carrying `{text,url,copy_code,expiration_time}`. `T2` | M |
@@ -579,8 +566,6 @@ point. **Not counted in the 250** — see the note above.
 | T2 | RTP pre-roll | `core` | 500 ms buffer so the first audio chunks are not clipped. Genuine audio-quality fix, cheap. `T36` |
 | T3 | `injectable getMessage` | `adapters` | Already reachable via `createSessionStore`; promoting it to a first-class option is easy. `T16` |
 | T4 | Group metadata cache | `multi` | Prerequisite for #197 — the participant count that makes privilege-climb a real detector instead of a counter. |
-| T5 | Export the security/multi/adapters/cli layers from `src/index.ts` | `core` | They compile and are tested by hand but are not on the package's public surface. One file. |
-| T6 | Extend `package.json` `exports` | `core` | Currently `.`, `./core/*`, `./plugins/*`, `./utils/*`. The `nyx-baileys/adapters/session-mongo.js` specifier in the adapter docstrings does not resolve. One file. |
 | T7 | Replace the raw NUL byte in `audit.ts` | `security` | `${body.prev}\u0000${canonicalize(body)}` writes the domain separator as a literal byte, so `file` classifies the source as binary, `git diff` treats it as binary, and some editors mangle it. The escape sequence is functionally identical. |
 | T8 | Ratchet invariant test | `core` | The five DESIGN-NOTES exclusions are enforced by convention. A test asserting no code path writes to `authState.keys` after connect would make exclusion §5 structural. |
 | T9 | Fix the stale `order` comments | `core` | `nyxBaileys.ts:64-65` say 70 and 75; the fields say 65 and 70. Behaviour is correct; only the comments lie. |

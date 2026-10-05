@@ -164,8 +164,10 @@ Signal keys are 32 raw bytes. Plain `JSON.stringify` turns one into
 `{"0":1,"1":3,…}`. Any JSON-path store must use Baileys' `BufferJSON`
 replacer/reviver or it will corrupt every key on first write.
 
-**Implemented here** in `src/adapters/`, with the corruption round-tripped
-explicitly in tests.
+**Not implemented here.** The `BufferJSON` round-trip lived in the prisma adapter,
+which was removed in `0ece183`. If you write a JSON-backed `SessionStore`, use
+Baileys' `BufferJSON` replacer and reviver, or a 32-byte Signal key becomes
+`{"0":1,…}` on first write and the ratchet desyncs silently.
 
 ---
 
@@ -346,7 +348,6 @@ separable and opt-in (which we did, into `antiban/`).
 
 Most of what the forks advertise is already in this framework and needed no
 port: anti-spam jitter and burst ceilings (`antiSpam.ts`), exponential backoff
-with full jitter (`reconnect.ts`), SQL/NoSQL session stores with composite
-tenant keys (`adapters/`), one-process-N-accounts (`multi/`), native-flow
+with full jitter (`reconnect.ts`), one-process-N-accounts (`multi/`), native-flow
 forms and carousels (`nodes.ts`), album assembly (`album.ts`), newsletters
 (`newsletter.ts`), polls (`poll.ts`) and LID routing (`lid.ts`).

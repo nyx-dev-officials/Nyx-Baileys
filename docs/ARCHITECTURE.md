@@ -467,32 +467,46 @@ proto field, but the button's entire payload is one opaque JSON string.
   recognisable value, because the shape varies by flow schema. Verified against a
   real rc14 submit: `{ text: "Railway", selection: "Railway" }`.
 
-### 5.6 `editedMessage` is a `FutureProofMessage`, not a text field
+### 5.6 An edit is a `protocolMessage`, not a wrapper
 
-`src/core/nodes.ts:263-265`:
+`src/core/nodes.ts:293`
 
 ```ts
-export function createEdit(text: string): WebMessageInfo {
-  return { message: { editedMessage: { text } as proto.IMessage['editedMessage'] } };
+export function createEdit(targetKey: WAMessageKey, text: string) {
+  return { text, edit: targetKey };
 }
 ```
 
-This is **broken**. On rc14 `editedMessage` is
-`optional FutureProofMessage editedMessage = 58`, and `FutureProofMessage` holds
-`optional Message message = 1` — not a `text` field. The `as` cast silences the
-compiler. Verified round-trip:
+An outbound edit is a **protocol message**, not a `FutureProofMessage` wrapper:
 
 ```
-input     : {"message":{"editedMessage":{"text":"hello world"}}}
-roundtrip : {"editedMessage":{}}          ← text silently gone
+protocolMessage { key, editedMessage, timestampMs, type: MESSAGE_EDIT }
 ```
 
-Correct shape is `{ editedMessage: { message: { conversation: text } } }`, also
-verified. `VERIFICATION.md` recorded this as part of the node-builder contract
-rather than a numbered defect; `tests/nodes.test.js` has it as a failing
-regression (`"createEdit actually carries the text onto the wire"`). Every other
-builder in `nodes.ts` round-trips correctly — `createAlbumContainer` and
-`toFlowMessage` were both checked and are correct.
+rc14 assembles that itself in `generateWAMessageContent`
+(`Utils/messages.js:514`) — when it sees an `edit` key it folds the message it
+just built into the `protocolMessage` above. So the caller's job is to hand it
+`{ text, edit: key }` and let it do the wrapping.
+
+Hand-building `editedMessage` compiles without complaint and is wrong.
+Measured on rc14, same text both ways:
+
+```
+{ text, edit: key }        71 bytes  type=14, parent key present, text intact
+editedMessage wrapper      15 bytes  no protocolMessage, no key, no edit type
+```
+
+The 15-byte form carries no text **and** names nothing to edit — the silent
+failure. `FutureProofMessage` is a genuine protobuf type, which is exactly why it
+is a convincing mistake: it is the wrapper for `viewOnce` and ephemeral framing,
+not for edits.
+
+`createEdit` now takes the target key and returns the content for `sendMessage`.
+**Breaking change** — callers of the old single-argument form get `undefined` as
+the key rather than a compile error. Nothing in-repo calls it.
+
+Every other builder in `nodes.ts` round-trips correctly — `createAlbumContainer`
+and `toFlowMessage` were both checked and are correct.
 
 ---
 
@@ -507,7 +521,7 @@ src/
     intercept.ts           patch/patchAll/listen/Disposables — the primitive
     nodes.ts               native-flow, album, edit protobuf builders
     media.ts               rc14 media traversal (the two-hop rule)
-    session-store.ts       SessionStore interface + file/memory/adapter factories
+    session-store.ts       SessionStore interface + file/memory stores + createSessionStore
   plugins/                 11 plugins, each a {name, order, apply}
     stealth.ts        10    identity pin, presence on real state
     lid.ts            20    resolveJid / resolvePn, TTL cache
@@ -525,12 +539,6 @@ src/
     types.ts               Plugin, PluginContext, SessionStore, SuperOptions
     compose.ts             WhatsApp text dialect, monospace tables, CJK widths
     logger.ts              levelled logger, child scopes, NO_COLOR/TTY
-  adapters/            (new)  SessionStore impls — none import a driver
-    session-sqlite.ts       injected persistence fn; atomic write + fsync
-    session-mongo.ts        creds doc + one doc per Signal key, native BSON
-    session-prisma.ts       two models, BufferJSON round-trip, no generated client
-    session-redis.ts        L1 cache layer, per-session epoch prefix
-    index.ts                barrel
   multi/               (new)  one process, N accounts
     session-manager.ts      SessionManager, broadcast, per-session restart
     index.ts                barrel
@@ -548,73 +556,75 @@ docs/                      this file, PLUGIN-API, FEATURES, DESIGN-NOTES,
                            plus VERIFICATION.md and REF-FINDINGS.md (inputs)
 ```
 
-### The newer layers: real, but not yet reachable
+### The newer layers: now exported
 
-`adapters/`, `multi/`, `security/`, `cli/` and `plugins/metrics.ts` are complete
-source files and are covered by `tsconfig.json` (`include: ["src/**/*.ts"]`), so
-they compile as part of the package. Two packaging gaps are worth knowing before
-you plan around them:
+`multi/`, `security/`, `cli/` and `plugins/metrics.ts` are complete source files
+covered by `tsconfig.json` (`include: ["src/**/*.ts"]`).
 
-1. **`src/index.ts` does not re-export them.** The 51 exports are all core,
-   plugins and utils. `SessionManager`, `AccessControl`, `redact`,
-   `parseArgv` and `SqliteSessionStore` are not among them.
-2. **`package.json` `exports` does not map them.** The map is `.`, `./core/*`,
-   `./plugins/*`, `./utils/*` — no `./adapters/*`, `./multi/*`, `./security/*`
-   or `./cli/*`. So even though `src/adapters/index.ts:11-13` documents the
-   intended `import … from 'nyx-baileys/adapters/session-mongo.js'`, that
-   specifier does not resolve against the published `exports` map. Until the map
-   is extended, these are reachable only by deep relative import from `dist/`.
+**`adapters/` has been removed.** The four database stores (sqlite, mongo,
+prisma, redis — 1,472 lines) were deleted in `0ece183`. Nothing outside
+`src/adapters/` imported them, verified before deletion. `src/index.ts` no longer
+re-exports them and `package.json` no longer maps `./adapters` or
+`./adapters/*`.
 
-Both are one-line changes in files this documentation pass does not own.
+The export surface is **22 targets**, all resolving (`node scripts/check-exports.mjs`):
+
+```
+.  ./lite  ./lite/*  ./package.json  ./core/*  ./plugins  ./plugins/*
+./utils/*  ./multi  ./multi/*  ./security  ./integrations  ./integrations/*
+./antiban  ./antiban/*  ./bot  ./bot/*  ./cli  ./cli/*
+```
+
+`src/index.ts` re-exports the root, plugin, util, multi, security, integrations,
+antiban and CLI layers.
 
 ---
 
 ## 7. Verify chain, as measured
 
-Measured 2026-10-03 against the tree described above.
+Measured 2026-10-05 against the current tree.
 
 | Step | Command | Result |
 |---|---|---|
 | Type check | `npm run check` | **exit 0 — 0 errors** |
+| Lint | `npm run lint` | **exit 0** (runs the same command as `check`) |
 | Build | `npm run build` | **exit 0 — 0 errors** |
-| Test | `npm test` | **exit 1 — runner cannot load the directory** |
-| Test (direct) | `node --test tests/*.test.js` | 195 tests, 186 pass, **9 fail** |
-| Runtime import | `import('./dist/index.js')` | exit 0, 51 exports |
+| Test | `npm test` | **exit 0 — 689 pass / 0 fail** |
+| Exports | `node scripts/check-exports.mjs` | **all 22 targets resolve** |
+| CI | GitHub Actions | **green** on Node 20 and 22 |
 
-The type check and build are **green** under `strict` +
-`noUncheckedIndexedAccess`, and `dist/` is current, so the test figures below
-do describe `src/`.
+Green under `strict` + `noUncheckedIndexedAccess`, with `dist/` current.
 
-`npm test` runs `node --test tests/` and fails with `Cannot find module
-'C:\Nyx-Baileys\tests'` — the directory form is resolved as a module path on
-this Node build. Invoking the files directly works.
+### Previously open, now closed
 
-**The 9 failures are genuine defects, not flakes**, and they cluster on the open
-items in this document:
+An earlier measurement of this chain recorded `npm test` failing to resolve the
+directory form and 9 failing tests. Both are resolved:
 
-| Failing test | Defect |
+| Item | Status |
 |---|---|
-| `dispose() restores relayMessage, not undefined` | pristine-stash scoping (§2) |
-| `undoing a second method on the same target restores the true original` | pristine-stash scoping (§2) |
-| `Disposables.dispose() restores every patched method, not just the first` | pristine-stash scoping (§2) / D11 |
-| `patchAll — one undo restores every method it patched` | pristine-stash scoping (§2) / D11 |
-| `createEdit actually carries the text onto the wire` | §5.6 |
-| `a released (zero-length) blob is still evicted by the keepMedia ceiling` | D7 |
-| `ctx.flowResponse carries the parsed native-flow payload` | flow engine reply plumbing |
-| `a messageParamsJson that parses to null is a no-op, not a TypeError` | `session-repair.ts:88-91` null guard |
+| `npm test` could not load `tests/` | Fixed — the script is `node --test ./tests/*.test.js`, the glob form. |
+| pristine-stash scoping, 4 tests | Fixed — `patch()` chains onto `original`, not `pristine` (`src/core/intercept.ts:80`). |
+| `createEdit actually carries the text` | Replaced by three regression tests; the edit shape is now `{ text, edit: key }` (§5.6). |
+| zero-length blob eviction (D7) | Not a defect — `sweepMedia` has a refcount guard (`memory.ts:130`). |
+| `ctx.flowResponse` native-flow payload | Fixed — `flow.ts:141-143` reads `nativeFlowResponseMessage.paramsJson`. |
+| `messageParamsJson` null guard | Fixed in `session-repair.ts`. |
+| D1 album linkage, D3 patch stacking, D8 disposables reset | Never were defects; see `VERIFICATION.md`. |
 
-All are `BUG:`-prefixed regression tests, so they fail loudly rather than rot.
-The count is a moving target — it was 11 when this was written and falls as the
-remaining work lands.
+### Still open
 
-`VERIFICATION.md` lists 15 defects (D0–D14) plus a node-builder contract note.
-Six are fixed and verified here — **D0, D1, D2, D3, D5, D9**, the same six its own
-"fix order" section nominated. Nine remain open: D4 (`goto` re-entrancy, still
-unguarded at `plugins/flow.ts:189-196`), D6 (privilege-climb check is still
-tautological at `plugins/group.ts:101-112` — `known` counts promotes, so
-`known >= 3` means "three promote events", not "all members are admins"), D7
-(media GC still evicts the blobs holding bytes at `plugins/memory.ts:73-79`),
-D8, D10 (`streamMedia` still materialises the full buffer then slices — the
-docstring at `:100-103` now concedes this rather than claiming bounded memory),
-D11, D12, D13, D14 (the warm-up ramp is still evaluated once per socket build
-rather than on an interval). Plus the stash bug in §2 and `createEdit` in §5.6.
+`VERIFICATION.md` tracks D0–D14. Six are resolved (D0, D2, D5, D9) and four were
+never real defects (D1, D3, D7, D8). The remainder:
+
+| Defect | State |
+|---|---|
+| D4 `goto()` re-entrancy | Still unguarded — `plugins/flow.ts`. `goto` into a step can no-op silently if the flow ended or TTL-expired. |
+| D6 privilege-climb check | Still tautological — `plugins/group.ts`. `known` counts promote events, so `known >= 3` means "three promotes", not "all members are admins". |
+| D10 `streamMedia` | Still materialises the full buffer then slices. The docstring now concedes this rather than claiming bounded memory. |
+| D11 `patchAll` | Returns a redundant first element. |
+| D12 album sentinel | A magic sentinel is used as a real expected-count. |
+| D13 `main()` | Installs a second `connection.update` listener. |
+| D14 warm-up ramp | Evaluated once per socket build rather than on an interval. |
+
+---
+
+
