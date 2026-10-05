@@ -1,4 +1,4 @@
-# VERIFICATION — nyx-baileys 0.3.0
+# VERIFICATION — nyx-baileys 0.3.1
 
 Date: 2026-10-03 · Upstream: `@whiskeysockets/baileys@7.0.0-rc14` · Node v24.19.0 · TypeScript 7.0.2 (global)
 

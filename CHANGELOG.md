@@ -4,7 +4,7 @@ All notable changes to `nyx-baileys`. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 semantic versioning with a `0.x` line.
 
-## [Unreleased]
+## [0.3.1] — 2026-10-06
 
 ### Added
 
@@ -50,6 +50,10 @@ semantic versioning with a `0.x` line.
   the whole module down. Lazy lookup keeps everything else working and lets this
   one function name its own absence.
 
+Patched release: `v0.3.0` was cut at `06b98b3`, before the `chatOps`
+plugin and the `toolkit` module landed in `c17c732`. Publishing from that tag
+would have shipped a package missing both, so the version moves to 0.3.1 and
+the tarball is verified to contain all 24 export targets.
 ## [0.3.0] — 2026-10-05
 
 ### Breaking

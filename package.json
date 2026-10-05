@@ -1,6 +1,6 @@
 {
   "name": "nyx-baileys",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Hyper-modular WhatsApp client framework — upstream Baileys engine, decorated at runtime. No node_modules edits.",
   "type": "module",
   "main": "./dist/index.js",
@@ -46,7 +46,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.json",
+    "build": "npm run clean && tsc -p tsconfig.json",
     "check": "tsc -p tsconfig.json --noEmit",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "node --test ./tests/*.test.js",
@@ -54,7 +54,7 @@
     "bench": "node --expose-gc bench/message-throughput.mjs",
     "bench:plugins": "node --expose-gc bench/plugin-profile.mjs",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
-    "prepublishOnly": "npm run clean && npm run build"
+    "prepublishOnly": "npm run clean && npm run build && node scripts/check-exports.mjs"
   },
   "keywords": [
     "whatsapp",
