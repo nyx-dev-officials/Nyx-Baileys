@@ -612,8 +612,9 @@ directory form and 9 failing tests. Both are resolved:
 
 ### Still open
 
-`VERIFICATION.md` tracks D0–D14. Ten are closed and four were never real defects.
-**One remains open.**
+`VERIFICATION.md` tracks D0–D14. **All are closed**, and four were never real
+defects in the first place. A separate findings file (`AGENTS-FIX-QUEUE.md`)
+tracks the documentation claims that live testing proved false.
 
 | Defect | State |
 |---|---|
@@ -621,7 +622,7 @@ directory form and 9 failing tests. Both are resolved:
 | D6 privilege-climb check | **CLOSED** — `group.ts:129` measures `known / population`, so a demotion genuinely lowers the signal. It is no longer a promote-event counter. |
 | D10 `streamMedia` | **CLOSED (documentation)** — the design gap is upstream's and unchanged: rc14 materialises the full buffer before chunking. Both the module docstring and `streamTo` now say "chunked handoff, not bounded memory". |
 | D11 `patchAll` | **CLOSED** — the array is exactly the applied patches; undo-everything is `undoAll()`. Absent methods no longer occupy a slot. |
-| D12 album sentinel | **OPEN** — a design wart, not a live bug. The placeholder repair at `album.ts:105-108` is correct and tested. A nullable `expected` is the honest fix; left as a wider refactor. |
+| D12 album sentinel | **CLOSED** — `Album.expected` is `number \| null`; a sibling-created album reports `null` until the parent lands, and `settle()` re-evaluates completion. The `MAX_SAFE_INTEGER` sentinel is gone from the data model. `album.ts:41`, `:100-115` |
 | D13 `main()` duplicate listener | **CLOSED** — zero `connection.update` registrations in `cli/main.ts`. |
 | D14 warm-up ramp | **CLOSED** — `warmup.ts:60` re-evaluates hourly, so a long-lived socket eases toward 1× instead of holding its day-one multiplier for the process lifetime. |
 

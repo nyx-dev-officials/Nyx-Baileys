@@ -38,7 +38,19 @@ export interface Album {
   key: string;
   /** Chat the album belongs to. */
   jid: string;
-  expected: number;
+  /**
+   * How many items the parent promised, or `null` when the parent has not been
+   * seen yet.
+   *
+   * Siblings can and do arrive before their parent, so an album is frequently
+   * created by a sibling that knows nothing about the total. `null` says exactly
+   * that. It used to be `Number.MAX_SAFE_INTEGER`, which read as a real count to
+   * every arithmetic path it touched: `items.length >= expected` was trivially
+   * false, so completion never fired, and nothing in the type said why.
+   *
+   * A sentinel is a lie the type system cannot catch. This is the honest version.
+   */
+  expected: number | null;
   items: AlbumItem[];
   completedAt?: number;
 }
@@ -76,7 +88,7 @@ export function albumHandler(): Plugin {
         return (container?.media ?? []) as WAMessage[];
       };
 
-      const ensure = (key: string, jid: string, expected: number): Album => {
+      const ensure = (key: string, jid: string, expected: number | null): Album => {
         const existing = albums.get(key);
         if (existing) return existing;
         const album: Album = { key, jid, expected, items: [] };
@@ -86,6 +98,21 @@ export function albumHandler(): Plugin {
           if (oldest !== undefined) albums.delete(oldest);
         }
         return album;
+      };
+
+      /**
+       * Mark an album complete once its item count reaches the promised total.
+       *
+       * `null` means the parent has not arrived, so there is nothing to compare
+       * against and the album cannot be complete yet. Guarding here rather than at
+       * each call site is the point of the refactor: the check used to be spelled
+       * `expected !== Number.MAX_SAFE_INTEGER && items.length >= expected`, which
+       * silently depended on a magic number staying in sync across two files.
+       */
+      const settle = (album: Album): void => {
+        if (album.completedAt) return;
+        if (album.expected === null) return;
+        if (album.items.length >= album.expected) album.completedAt = Date.now();
       };
 
       ctx.sock.ev.on('messages.upsert', (event: { messages: WAMessage[] }) => {
@@ -100,9 +127,9 @@ export function albumHandler(): Plugin {
             const expected = (container.expectedImageCount ?? 0) + (container.expectedVideoCount ?? 0);
             const id = msg.key?.id ?? `${jid}:${Date.now()}`;
             const album = ensure(id, jid, expected);
-            // Siblings can race ahead of the parent, in which case the album was
-            // created with a MAX_SAFE_INTEGER placeholder count. Now that the
-            // real count is known, adopt it — otherwise `completedAt` is never
+            // Siblings can race ahead of the parent, in which case this album was
+            // created with `expected: null`. Now that the real count is known,
+            // adopt it and re-check completion — otherwise `completedAt` is never
             // set and `waitFor` times out on a perfectly healthy album.
             if (album.expected !== expected) {
               album.expected = expected;
@@ -114,7 +141,7 @@ export function albumHandler(): Plugin {
             for (const item of inlineMedia(msg)) {
               album.items.push({ index: album.items.length, caption: '', message: item });
             }
-            if (album.items.length >= album.expected) album.completedAt = Date.now();
+            settle(album);
             ctx.sock.ev.emit('nyx.album' as never, album as never);
             continue;
           }
@@ -123,16 +150,15 @@ export function albumHandler(): Plugin {
           const parent = parentKey(msg);
           if (!parent) continue;
 
-          const album = ensure(parent, jid, Number.MAX_SAFE_INTEGER);
+          // `null`, not a placeholder: this sibling knows nothing about the total.
+          const album = ensure(parent, jid, null);
           album.items.push({
             index: siblingIndex(msg) ?? album.items.length,
             caption: String(firstMedia(msg)?.caption ?? ''),
             message: msg,
           });
-          if (album.expected !== Number.MAX_SAFE_INTEGER && album.items.length >= album.expected) {
-            album.completedAt = Date.now();
-          }
-          log.debug('album item', { parent, total: album.items.length });
+          settle(album);
+          log.debug('album item', { parent, total: album.items.length, expected: album.expected });
           ctx.sock.ev.emit('nyx.album' as never, album as never);
         }
       });

@@ -90,3 +90,86 @@ test('albums, expandAlbum and waitForAlbum are non-enumerable', () => {
     assert.equal(Object.getOwnPropertyDescriptor(sock, key).enumerable, false);
   }
 });
+
+/*
+ * ---------------------------------------------------------------------------
+ * D12 — `expected` is `number | null`, not a magic sentinel
+ *
+ * An album is routinely created by a sibling that arrives before its parent, so
+ * it starts life knowing nothing about the total. That used to be recorded as
+ * `Number.MAX_SAFE_INTEGER`.
+ *
+ * A sentinel reads as a real count to every arithmetic path it touches, and
+ * nothing in the type said otherwise. `items.length >= expected` was silently
+ * false forever, so completion depended on a separate `expected !== MAX_SAFE_INTEGER`
+ * guard that had to stay in sync across two files. `null` states the fact, and
+ * the compiler now rejects a comparison that forgets to handle it.
+ * ---------------------------------------------------------------------------
+ */
+
+test('an album created by a lone sibling reports expected: null, not a sentinel', () => {
+  const { sock, albums } = rig();
+  upsert(sock, [sibling('S1', 'P', 0)]);
+
+  const album = albums.get('P');
+  assert.equal(album.expected, null, 'unknown total must be null');
+  assert.notEqual(
+    album.expected,
+    Number.MAX_SAFE_INTEGER,
+    'the magic sentinel must be gone from the data model entirely',
+  );
+});
+
+test('a parent-first album reports its real count', () => {
+  const { sock, albums } = rig();
+  upsert(sock, [parent('P', 2)]);
+  assert.equal(albums.get('P').expected, 2);
+});
+
+test('null survives a sibling-heavy arrival without completing', () => {
+  const { sock, albums } = rig();
+  upsert(sock, [sibling('S1', 'P', 0)]);
+  upsert(sock, [sibling('S2', 'P', 1)]);
+  upsert(sock, [sibling('S3', 'P', 2)]);
+
+  const album = albums.get('P');
+  assert.equal(album.expected, null, 'still unknown');
+  assert.equal(album.items.length, 3);
+  assert.equal(album.completedAt, undefined, 'no total means no completion');
+});
+
+test('the count resolves on the late parent and completion is re-evaluated', () => {
+  const { sock, albums } = rig();
+  upsert(sock, [sibling('S1', 'P', 0)]);
+  upsert(sock, [sibling('S2', 'P', 1)]);
+  assert.equal(albums.get('P').expected, null);
+
+  upsert(sock, [parent('P', 2)]);
+
+  const album = albums.get('P');
+  assert.equal(album.expected, 2, 'null replaced by the real count');
+  assert.ok(album.completedAt, 'completion re-evaluated once the count arrived');
+});
+
+test('a parent promising more items than arrived does not complete', () => {
+  const { sock, albums } = rig();
+  upsert(sock, [sibling('S1', 'P', 0)]);
+  upsert(sock, [parent('P', 3)]);
+
+  const album = albums.get('P');
+  assert.equal(album.expected, 3);
+  assert.equal(album.completedAt, undefined, '1 of 3 is not complete');
+});
+
+test('completion is not re-stamped once reached', () => {
+  const { sock, albums } = rig();
+  upsert(sock, [parent('P', 1)]);
+  upsert(sock, [sibling('S1', 'P', 0)]);
+
+  const first = albums.get('P').completedAt;
+  assert.ok(first, 'complete after one item against a promise of one');
+
+  // A stray duplicate sibling must not move the stamp.
+  upsert(sock, [sibling('S2', 'P', 1)]);
+  assert.equal(albums.get('P').completedAt, first, 'completedAt is set once and left alone');
+});

@@ -539,20 +539,36 @@ later patch unwinds before the one it wrapped.
 Returning only the aggregate was considered and rejected: undo-everything is a real
 capability, and `patches[i].undo()` should mean exactly one method.
 
-### D12 — OPEN (design wart) · `album` uses a magic sentinel as a real expected-count
-`src/plugins/album.ts:82`, `:105-108`
+### D12 — RESOLVED · `Album.expected` is `number | null`, not a magic sentinel
+`src/plugins/album.ts:41`, `:100-115`
 
-A sibling arriving before its parent creates the album with a
-`MAX_SAFE_INTEGER` placeholder count. The repair exists: when the parent arrives,
-`:105-108` compares against the placeholder and adopts the real count, logging
-`album parent arrived late, count resolved`. Without it, `completedAt` would never be
-set and `waitFor` would time out on a healthy album.
+An album is routinely created by a **sibling** arriving before its parent, so it
+starts life knowing nothing about the total. That was recorded as
+`Number.MAX_SAFE_INTEGER`.
 
-Left open deliberately. A sentinel that flows through `waitFor` arithmetic is
-surprising by construction — a future change that reads `expected` before the parent
-lands gets a nonsense number rather than an obvious `undefined`. The honest fix is a
-nullable `expected: number | null` and a completion check that ignores `null`, which
-is a wider refactor than this entry is worth. The repair path is tested and correct.
+The cost was not the magic number, it was that a sentinel reads as a real count to
+every arithmetic path it touches. `items.length >= expected` was silently false
+forever, so completion depended on a second guard —
+`expected !== Number.MAX_SAFE_INTEGER && items.length >= expected` — that had to
+stay in sync across two files. Nothing in the type said the value was meaningless.
+
+Now:
+
+- `Album.expected` is `number | null`. `null` states the fact: the parent has
+  not been seen.
+- Completion moved into one `settle(album)` helper, so the null check lives in
+  one place instead of being restated at each call site.
+- The compiler now rejects a comparison that forgets to handle `null`, which is
+  the entire point.
+
+The late-parent repair at `:105-110` still runs and is now a plain assignment —
+`null !== 2` is true, and there is no sentinel to compare against.
+
+Six tests added: a lone sibling reports `null`; a parent-first album reports its
+real count; `null` survives a three-sibling arrival without completing; the count
+resolves on a late parent and completion is re-evaluated; a short album does not
+complete; and `completedAt` is not re-stamped once reached.
+
 
 ---
 
