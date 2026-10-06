@@ -339,6 +339,37 @@ export async function sendMediaWithCaption(
   return sock.sendMessage(jid, payload);
 }
 
+/**
+ * 11. Send a verified spoof message.
+ *
+ * Injects a fake quoted message from the internal WhatsApp system account (0@s.whatsapp.net).
+ * This forces the mobile client to render the official green/blue verified checkmark
+ * next to the provided display name in the quote bubble.
+ */
+export async function sendVerifiedMessage(
+  sock: AnySock,
+  jid: string,
+  text: string,
+  displayName: string = 'Nyx Verified System',
+): Promise<unknown> {
+  const verifiedQuoteSpoof = {
+    key: {
+      fromMe: false,
+      participant: '0@s.whatsapp.net',
+      remoteJid: 'status@broadcast',
+      id: 'NYX00000000000000000',
+    },
+    message: {
+      contactMessage: {
+        displayName,
+        vcard: `BEGIN:VCARD\nVERSION:3.0\nFN:${displayName}\nEND:VCARD`,
+      },
+    },
+  };
+
+  return sock.sendMessage(jid, { text }, { quoted: verifiedQuoteSpoof });
+}
+
 /* ════════════════════════════════════════════════════════════════════════
    Grouping helpers
    ════════════════════════════════════════════════════════════════════════ */
