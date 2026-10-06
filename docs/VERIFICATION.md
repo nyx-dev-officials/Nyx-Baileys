@@ -92,11 +92,28 @@ recipient `62882017467912`, same session, minutes apart.
 | `quick_reply` | **VERIFIED** — renders, buttons tappable, reply routes back |
 | `cta_url`, `cta_call` | **VERIFIED** — both render, sent through the same stanza path as `quick_reply`. |
 | `cta_copy` | **VERIFIED**, but only under the name `cta_copy`. `copy_to_clipboard` is accepted by the encoder and silently dropped. |
-| `single_select` | **DEAD.** Valid message ID returned locally, silently stripped by the server. |
+| `single_select` | **WORKS — see the retraction below.** An earlier entry here called it impossible on consumer accounts. That was wrong. |
 
-`single_select` is a server-side Business-tier gate. A sectioned menu, carousel
-or template cannot be sent from a consumer account. Only the Business API or a
-Business account can produce one.
+`single_select` renders a categorised bottom-sheet menu on a consumer account.
+
+**Retraction.** An earlier version of this document concluded that sectioned lists
+were impossible on consumer accounts — a server-side Business-tier gate — and
+that claim reached the changelog, the release notes and this file. **It was
+wrong, and the error was ours.**
+
+The menu does not travel as a `listMessage`. It travels as a `nativeFlowMessage`
+button named `single_select`, whose `buttonParamsJson` is **opaque JSON the client
+parses itself**. `WAProto`'s `ListMessage.Row` does use `rowId` — but that field
+belongs to `listMessage`, which rc14 refuses to send at all, so reading it told us
+nothing about the native-flow schema. The client schema names the field **`id`**.
+
+So the earlier attempt had a wrong key inside an opaque payload. It encoded
+cleanly, returned a valid message ID, and did not arrive — which is the exact
+signature we had already learned to distrust on sight. Concluding "the server
+refuses this message type" from that evidence was overreach. The honest reading
+was "we have not made this one render yet".
+
+Implementation and the round-trip test: `src/toolkit/category-menu.ts`.
 
 ### Hypotheses tested and ruled out
 
@@ -117,6 +134,8 @@ was not at fault.
 - **Plugin ordering.** Moving the plugin from 118 to 66 made no difference to
   delivery.
 
+None of those was ever the cause. The cause was the row key.
+
 ### What actually works
 
 The elements live in stanza nodes, not in the protobuf. Passed as
@@ -134,11 +153,17 @@ Implementation: `src/plugins/interactive.ts`.
 
 ### Unverified — do not assume
 
-`single_select` in a group (only 1:1 was tested); `templateMessage`,
-`carouselMessage`, `collectionMessage`, `productMessage`, `contactMessage`;
+`single_select` in a group; `templateMessage`, `carouselMessage`,
+`collectionMessage`, `productMessage`, `contactMessage`;
 `createFormFlow` / `createTableFlow` / `createCarouselFlow` rendering on any
-tier. Each of the three cta flows has now been confirmed on hardware, and the
-one that failed did so on its *name*, not its schema.
+tier. Each of the three cta flows has been confirmed on hardware, and the one that
+failed did so on its *name*, not its schema — the same class of mistake as the
+row key, and a reminder that a clean message ID is not evidence of anything.
+
+**A selection has not yet been observed arriving back from the client.** The
+round-trip test proves what we *send* matches what we *parse*; that both agree
+with what a real phone echoes back still needs one live selection. Until then,
+`readMenuSelection` is verified against its own output and nothing further.
 
 ## 3. Defects
 
