@@ -808,13 +808,17 @@ export async function pinMessage(
   sock: any,
   params: PinMessageParams,
 ): Promise<unknown> {
-  // Baileys rc14+ exposes sock.pinMessage for this.
-  if (typeof sock.pinMessage === 'function') {
-    return sock.pinMessage(params.jid, params.key, params.unpin ? 0 : 1);
-  }
-  // Fallback: send via sendMessage with pin content type.
+  // rc14 has no `sock.pinMessage`. Pinning is a `pin` content key — but the
+  // shape is a trap: `Utils/messages.js:365` assigns `pinInChatMessage.key =
+  // message.pin` and `pinInChatMessage.type = message.type`, i.e. the message
+  // key and the type are **siblings at the top level**, not nested inside
+  // `pin`. Sending `{ pin: { key, type } }` therefore puts an object where a
+  // MessageKey belongs and is silently dropped by protobuf.
+  //
+  // Same class of bug as `rowId` vs `id` — see CONTEXT.md §8.
   return sock.sendMessage(params.jid, {
-    pin: { key: params.key, type: params.unpin ? 2 : 1 },
+    pin: params.key,
+    type: params.unpin ? 2 : 1,
   });
 }
 
@@ -882,15 +886,29 @@ export async function archiveChat(
 /**
  * Search messages across all chats or within a specific JID.
  */
+/**
+ * Search messages in a chat.
+ *
+ * **Not supported in rc14.** There is no message-search API on the socket and
+ * none in `Utils/` — no `searchMessages`, `messagesSearch`, or equivalent. This
+ * previously returned `{ messages: [], count: 0 }`, which is worse than an
+ * error: a caller cannot distinguish "no matches" from "this was never
+ * implemented", so an empty search result reads as a real answer.
+ *
+ * It now throws, so the gap is visible at the call site instead of surfacing as
+ * silently missing data. The message names what would be required to implement
+ * it — store-level access to the indexed message database, which the socket
+ * does not expose.
+ */
 export async function searchMessages(
-  sock: any,
+  _sock: any,
   params: SearchMessagesParams,
-): Promise<unknown> {
-  if (typeof sock.searchMessages === 'function') {
-    return sock.searchMessages(params.query, params.jid, params.count ?? 25, params.page ?? 1);
-  }
-  // Minimal fallback returning empty
-  return { messages: [], count: 0 };
+): Promise<never> {
+  throw new Error(
+    'searchMessages: unsupported in Baileys rc14 — the socket exposes no message-search '
+    + `API (no searchMessages / messagesSearch / messagesQuery in the installed rc14). `
+    + `Requested: ${params.query}`,
+  );
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
@@ -899,16 +917,27 @@ export async function searchMessages(
 
 /**
  * Fetch delivery/read receipt info for a message.
+ *
+ * **Not supported in rc14.** There is no `fetchMessageInfo` on the socket and
+ * none in `Utils/`. This previously returned `null`, which reads as "no receipt
+ * exists" — indistinguishable from "never implemented", so a caller would treat
+ * an absent implementation as a delivered-but-unread message.
+ *
+ * It now throws rather than guessing. For genuine read state, use
+ * `readMessages`/`sendReceiptRead` with a real inbound key: note that
+ * CONTEXT.md §8 records this account returning nothing for its *own* outgoing
+ * keys, since a receipt must reference an inbound message.
  */
 export async function getMessageInfo(
-  sock: any,
+  _sock: any,
   jid: string,
   messageId: string,
-): Promise<unknown> {
-  if (typeof sock.fetchMessageInfo === 'function') {
-    return sock.fetchMessageInfo(jid, messageId);
-  }
-  return null;
+): Promise<never> {
+  throw new Error(
+    'getMessageInfo: unsupported in Baileys rc14 — the socket exposes no '
+    + `fetchMessageInfo. Requested ${messageId} in ${jid}. Use readMessages with a real `
+    + 'inbound key for read state instead.',
+  );
 }
 
 /* ═══════════════════════════════════════════════════════════════════════

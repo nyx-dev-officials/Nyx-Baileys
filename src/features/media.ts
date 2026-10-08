@@ -27,6 +27,8 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { spawn } from 'node:child_process';
+import sharpLib from 'sharp';
 import { basename, extname, join, resolve } from 'node:path';
 import { pipeline, Readable, Transform, Writable } from 'node:stream';
 import { promisify } from 'node:util';
@@ -37,6 +39,56 @@ const pipelineAsync = promisify(pipeline);
 const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
 const deflateAsync = promisify(deflate);
+
+/* ───────────────────── codec backends (sharp / ffmpeg) ───────────────── */
+
+/** sharp, typed loosely: only the operations actually used below. */
+type SharpPipeline = ReturnType<typeof sharpLib>;
+
+function sharpInstance(input: string | Buffer, opts?: Record<string, unknown>): SharpPipeline {
+  return sharpLib(input, opts as never);
+}
+
+/**
+ * Resolve an ffmpeg binary, or throw naming the caller that needed it.
+ *
+ * Deliberately **no fallback**. The functions that need this previously guessed
+ * byte offsets and wrote corrupt output while returning success; a loud throw
+ * is the correct trade for media the user actually owns. Pass `FFMPEG_PATH` to
+ * point at a specific binary, which is what a packaged deployment should do
+ * rather than relying on PATH.
+ */
+async function requireFfmpeg(caller: string): Promise<string> {
+  const explicit = process.env.FFMPEG_PATH;
+  if (explicit && existsSync(explicit)) return explicit;
+
+  const { execFile } = await import('node:child_process');
+  const probe = promisify(execFile);
+  try {
+    await probe('ffmpeg', ['-version'], { timeout: 5_000 });
+    return 'ffmpeg';
+  } catch {
+    throw new Error(
+      `${caller}: requires ffmpeg on PATH (or FFMPEG_PATH set). No byte-level fallback is `
+      + 'provided on purpose — cutting a container by estimated byte offsets produces an '
+      + 'unplayable file, which is worse than refusing to run.',
+    );
+  }
+}
+
+/** Run ffmpeg and reject on a non-zero exit, surfacing its stderr. */
+async function runFfmpeg(bin: string, args: string[]): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(bin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', (d) => { stderr += String(d); });
+    child.on('error', (e) => reject(new Error(`ffmpeg failed to start: ${e.message}`)));
+    child.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg exited ${code}: ${stderr.trim().slice(0, 400)}`));
+    });
+  });
+}
 
 /* ─────────────────────────────── shared types ─────────────────────────── */
 
@@ -297,22 +349,61 @@ export interface CompressImageOptions {
 }
 
 /**
- * Compress an image using gzip (pure-Node stand-in for codec compression).
- * In a real deployment wire in `sharp` at the call site; this function handles
- * all I/O bookkeeping and returns a fully-typed result.
+ * Compress an image for real, via libvips (already a dependency, through sharp).
+ *
+ * This used to gzip the bytes and name the result `.compressed.gz`. That was
+ * worse than not compressing at all: the output was not a decodable image, so
+ * every downstream consumer — including WhatsApp's own media pipeline — would
+ * reject it, while `CompressionResult` reported success and a plausible ratio.
+ * A silent no-op with a success return is the most expensive kind of bug.
+ *
+ * Now it decodes, optionally resizes, and re-encodes. A non-decodable input
+ * makes sharp throw, and that propagates rather than producing a broken file.
  */
 export async function compressImage(
   inputPath: string,
   options: CompressImageOptions = {},
 ): Promise<CompressionResult> {
-  const { outputPath = `${inputPath}.compressed.gz` } = options;
-  const src = readFileSync(inputPath);
-  const compressed = await gzipAsync(src, { level: 9 });
-  writeFileSync(outputPath, compressed);
-  const originalSize = src.length;
-  const compressedSize = compressed.length;
+  const { outputPath, quality = 80, format, maxWidthPx } = options;
+  const originalSize = statSync(inputPath).size;
+
+  // Derive the format from the extension unless told otherwise, so a `.png`
+  // input does not silently become JPEG and lose its alpha channel.
+  const ext = extname(inputPath).toLowerCase();
+  const inferred: ImageFormat = ext === '.png' ? 'png'
+    : ext === '.webp' ? 'webp'
+      : ext === '.gif' ? 'gif'
+        : 'jpeg';
+  const target = format ?? inferred;
+
+  let pipeline = sharpInstance(inputPath, { animated: target === 'gif' });
+
+  if (maxWidthPx) {
+    // withoutEnlargement: never upscale a small image just to hit a width.
+    pipeline = pipeline.resize({ width: maxWidthPx, withoutEnlargement: true });
+  }
+
+  switch (target) {
+    case 'png':
+      // PNG is lossless, so `quality` maps to palette effort, not quantisation.
+      pipeline = pipeline.png({ compressionLevel: 9, palette: quality < 100 });
+      break;
+    case 'webp':
+      pipeline = pipeline.webp({ quality });
+      break;
+    case 'gif':
+      pipeline = pipeline.gif();
+      break;
+    default:
+      pipeline = pipeline.jpeg({ quality, mozjpeg: true });
+  }
+
+  const out = outputPath ?? `${inputPath}.compressed.${target === 'jpeg' ? 'jpg' : target}`;
+  await pipeline.toFile(out);
+
+  const compressedSize = statSync(out).size;
   return {
-    outputPath,
+    outputPath: out,
     originalSize,
     compressedSize,
     ratio: compressedSize / originalSize,
@@ -1821,9 +1912,29 @@ export interface TrimMediaOptions {
 }
 
 /**
- * Trim a media file to a specified time range.
- * Performs a proportional byte-slice as a stand-in for container-aware
- * trimming; replace with ffmpeg `-ss -to` at the call site.
+ * Trim a media file to a time range, container-aware, via ffmpeg.
+ *
+ * ## Why this no longer byte-slices
+ *
+ * It previously estimated byte offsets from an assumed 128 kbps bitrate and
+ * wrote `src.subarray(startByte, endByte)`. **That destroys the file.** MP4 is a
+ * box-structured container: the `moov` atom can sit at the end of the file, and
+ * cutting arbitrary bytes leaves a container whose index points at data that is
+ * no longer there. The result is unplayable — and `TrimMediaResult` reported
+ * success with a correct-looking `durationMs`. Silent corruption of the user's
+ * own media is the worst outcome this module could produce.
+ *
+ * There is no byte-offset formula that works, because the mapping from time to
+ * byte offset depends on the actual bitrate, keyframe positions and atom layout
+ * of that specific file. So the cut has to be container-aware, which means
+ * ffmpeg.
+ *
+ * ## ffmpeg is required, and that is checked
+ *
+ * Availability is probed before the run and a missing binary throws with a clear
+ * message. It does *not* fall back to slicing: a loud failure is recoverable,
+ * a corrupt file handed back as a success is not. `-c copy` is used so the trim
+ * is fast and lossless; only the container is rewritten.
  */
 export async function trimMedia(
   inputPath: string,
@@ -1831,15 +1942,27 @@ export async function trimMedia(
 ): Promise<TrimMediaResult> {
   const { startMs, endMs, outputPath = `${inputPath}.trimmed${extname(inputPath)}` } = options;
   if (endMs <= startMs) throw new RangeError('endMs must be greater than startMs');
+  if (startMs < 0) throw new RangeError('startMs must be >= 0');
 
-  const src = readFileSync(inputPath);
-  const total = src.length;
-  // Estimate byte offsets proportionally using an assumed 128 kbps bitrate.
-  const bytesPerMs = (128 * 1024) / (8 * 1000);
-  const startByte = Math.min(Math.floor(startMs * bytesPerMs), total);
-  const endByte = Math.min(Math.floor(endMs * bytesPerMs), total);
-  const trimmed = src.subarray(startByte, endByte);
-  writeFileSync(outputPath, trimmed);
+  const ffmpeg = await requireFfmpeg('trimMedia');
+  // -ss before -i seeks by keyframe (fast); re-encoding is avoided with -c copy.
+  await runFfmpeg(ffmpeg, [
+    '-hide_banner', '-loglevel', 'error', '-y',
+    '-ss', String(startMs / 1000),
+    '-i', inputPath,
+    '-to', String((endMs - startMs) / 1000),
+    '-c', 'copy',
+    outputPath,
+  ]);
+
+  // ffmpeg exits 0 and can still write nothing useful for some inputs, so the
+  // output is verified rather than assumed.
+  if (!existsSync(outputPath) || statSync(outputPath).size === 0) {
+    throw new Error(
+      `trimMedia: ffmpeg reported success but produced no output at ${outputPath}. `
+      + 'The input may be an unsupported container.',
+    );
+  }
 
   return {
     outputPath,
