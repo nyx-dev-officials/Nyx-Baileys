@@ -528,8 +528,43 @@ export function sampleN<T>(arr: T[], n: number): T[] {
 }
 
 /** Generate a numeric range `[start, end)` with optional `step`. */
+/**
+ * Build a numeric range.
+ *
+ * ## Why the arguments are type-checked
+ *
+ * `for (let i = start; i < end; i += step)` looks safe for any input, and is
+ * not. Given strings, `i += step` performs **string concatenation**, not
+ * addition, so `range('hello', 'x')` iterates `'hello1'`, `'hello12'`,
+ * `'hello123'`, … — each still sorting before `'x'`, pushed onto the array
+ * without end. That is an unbounded loop *and* unbounded allocation, so it
+ * hangs the process and exhausts memory rather than failing.
+ *
+ * It was found by executing this module, not by reading it: the function is
+ * three lines, type-checks, and every unit test passes it numbers.
+ */
 export function range(start: number, end: number, step = 1): number[] {
+  if (typeof start !== 'number' || !Number.isFinite(start)) {
+    throw new TypeError(`range: start must be a finite number, received ${typeof start}`);
+  }
+  if (typeof end !== 'number' || !Number.isFinite(end)) {
+    throw new TypeError(`range: end must be a finite number, received ${typeof end}`);
+  }
+  if (typeof step !== 'number' || !Number.isFinite(step)) {
+    throw new TypeError(`range: step must be a finite number, received ${typeof step}`);
+  }
   if (step === 0) throw new RangeError('range: step cannot be 0');
+
+  // Bound the output: a huge span would otherwise allocate until the process
+  // dies, which is the same failure the type guard above prevents for strings.
+  // The span may legitimately be fractional — range(0, 10, 3) spans 3.33 and
+  // yields 4 elements — so the limit applies to the element count, not to
+  // whether the span is a whole number.
+  const count = Math.ceil(Math.abs(end - start) / Math.abs(step));
+  if (!Number.isFinite(count) || count > 1e7) {
+    throw new RangeError(`range: refusing to build ${count} elements (limit 1e7)`);
+  }
+
   const result: number[] = [];
   if (step > 0) for (let i = start; i < end; i += step) result.push(i);
   else for (let i = start; i > end; i += step) result.push(i);
@@ -538,6 +573,12 @@ export function range(start: number, end: number, step = 1): number[] {
 
 /** Call `fn(index)` exactly `n` times, collecting results. */
 export function times<T>(n: number, fn: (i: number) => T): T[] {
+  // Same hazard as `range`, from the other direction: `Array.from` with an
+  // enormous length allocates until the process dies.
+  if (typeof n !== 'number' || !Number.isFinite(n)) {
+    throw new TypeError(`times: n must be a finite number, received ${typeof n}`);
+  }
+  if (Math.abs(n) > 1e7) throw new RangeError(`times: refusing to call ${n} times (limit 1e7)`);
   return Array.from({ length: Math.max(0, n) }, (_, i) => fn(i));
 }
 
