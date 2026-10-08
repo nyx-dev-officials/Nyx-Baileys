@@ -68,6 +68,16 @@ export interface SuperOptions {
   /** Client fingerprint. Defaults to a desktop Chrome string. */
   browser?: readonly [string, string, string];
 
+  /**
+   * Request a full history sync instead of the recent-only default.
+   *
+   * Pair this with the default Chrome/WEB_BROWSER tuple. Combining it with
+   * `Browsers.windows('Desktop')` makes rc14 advertise the retired `WIN32`
+   * sub-platform, which the server rejects with a 428 before any QR is emitted —
+   * `assertBrowserIsSafe` refuses that pair rather than letting it fail silently.
+   */
+  syncFullHistory?: boolean;
+
   /** Human-paced sending. */
   antiSpam?: Partial<AntiSpamOptions>;
   /** Days to ramp a freshly paired number up to full rate. 0 disables. */

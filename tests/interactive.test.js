@@ -160,8 +160,16 @@ test('a list becomes a single_select flow carrying its sections', async () => {
 
   const params = JSON.parse(buttons[0].buttonParamsJson);
   assert.equal(params.sections.length, 1, 'sections lost');
-  assert.equal(params.sections[0].rows[0].rowId, 'c', 'row ids lost');
+  // The wire field is `id`, not `rowId`. A client given `rowId` accepts the
+  // stanza and then renders nothing, so the normaliser renames it.
+  assert.equal(params.sections[0].rows[0].id, 'c', 'row id lost');
+  assert.equal(params.sections[0].rows[0].rowId, undefined, 'rowId must not reach the wire');
   assert.equal(params.sections[0].rows[0].title, 'Call Button');
+  assert.deepEqual(
+    Object.keys(params.sections[0].rows[0]).sort(),
+    ['description', 'header', 'id', 'title'],
+    'rows carry exactly the four fields a client renders',
+  );
 });
 
 test('the message is keyed to the chat and marked as ours', async () => {
@@ -358,7 +366,7 @@ test('a list can be refused outright instead of converted', async () => {
 
   await assert.rejects(
     () => sock.sendMessage(GROUP, LIST),
-    /dropped by the server/,
+    /listFallback is "throw"/,
     'throw must refuse the send, not convert it',
   );
 });

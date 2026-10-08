@@ -48,6 +48,15 @@ export { webhooks } from './webhook.js';
 export { interactive } from './interactive.js';
 export { metrics } from './metrics.js';
 
+/* mentions */
+export { hiddenMentions } from './Hidden.js';
+export type { HiddenOptions } from './Hidden.js';
+
+/* verified */
+export { verifiedSpoof } from './Verified.js';
+export type { VerifiedOptions } from './Verified.js';
+
+
 /* moderation */
 export { moderation } from './moderation.js';
 export type {

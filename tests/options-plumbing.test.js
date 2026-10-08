@@ -51,6 +51,8 @@ test('antiSpam options reach the plugin instead of being dropped', () => {
 test('unset antiSpam options fall back to the documented defaults', () => {
   const sock = applyFromChain({});
   const cfg = sock.__antispam.config();
+  // 2.5s floor, requested pacing. `tests/send-cooldown.test.js` proves the
+  // behaviour; this one only pins the number.
   assert.equal(cfg.minGapMs, 2500);
   assert.equal(cfg.jitterMs, 4000);
   assert.equal(cfg.maxPerMinute, 20);

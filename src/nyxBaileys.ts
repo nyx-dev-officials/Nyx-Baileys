@@ -19,6 +19,7 @@ import { memoryGc } from './plugins/memory.js';
 import { mediaStreamer } from './plugins/media-stream.js';
 import { autoReconnect } from './plugins/reconnect.js';
 import { sessionRepair } from './plugins/session-repair.js';
+import { verifiedSpoof } from './plugins/Verified.js';
 
 /**
  * Nyx-Baileys.
@@ -58,29 +59,26 @@ export class NyxBaileys {
 
   /** Decorators, lowest order first. Override via `registerPlugin`. */
   protected plugins(): Plugin[] {
-    // Every factory here used to be called with no arguments, which meant the
-    // matching `SuperOptions` fields were type-checked, documented, and then
-    // silently discarded — `antiSpam` and `warmupDays` both.
-    //
-    // Symptom, measured on hardware: `{ antiSpam: { minGapMs: 300, maxGapMs:
-    // 700 } }` still paced every send at ~20s, because the plugin was running on
-    // DEFAULTS (minGapMs 2.5s + jitterMs 4s). `{ warmupDays: 0 }` likewise left
-    // the day-one ramp active. Both looked like "the option is broken"; it was
-    // never plumbed through.
     const o = this.options;
     return [
-      stealth(),      // 10  identity + tuning
-      clockSync(),    // 15  server clock estimate
-      lidRouter(),    // 20  target resolution
-      mediaStreamer(),// 30  download path
-      albumHandler(), // 40  incoming containers
-      memoryGc(),     // 50  prune state
-      groupGuard(),   // 60  admin policy
-      sessionRepair(),// 65  message normaliser
-      autoReconnect(), // 70  self-healing backoff
+      stealth(),        // 10  identity + tuning
+      // Explicitly on. This plugin was suspected of suppressing its own
+      // messages for weeks (CONTEXT.md §6.1); that is now disproven — see the
+      // resolution note there. Written as `enabled: true` rather than relying on
+      // an undefined default so the intent is greppable, since the plugin is
+      // opt-*out* and its absence from this line would be silent.
+      verifiedSpoof({ enabled: true }),  // 12  default green checkmark interceptor
+      clockSync(),      // 15  server clock estimate
+      lidRouter(),      // 20  target resolution
+      mediaStreamer(),  // 30  download path
+      albumHandler(),   // 40  incoming containers
+      memoryGc(),       // 50  prune state
+      groupGuard(),     // 60  admin policy
+      sessionRepair(),  // 65  message normaliser
+      autoReconnect(),  // 70  self-healing backoff
       antiSpam(o.antiSpam),   // 80  pacing queue
-      delivery(),     // 85  delivery-rate tracking
-      flowEngine(),   // 90  conversational routing
+      delivery(),       // 85  delivery-rate tracking
+      flowEngine(),     // 90  conversational routing
       warmup(o.warmupDays),   // 100 rate ramp
     ];
   }
@@ -119,14 +117,6 @@ export class NyxBaileys {
     const { state, saveCreds } = await store.init();
     await resolveWebVersion().catch(() => undefined);
 
-    // Creds are persisted by an async `writeFile` that truncates before it
-    // writes, so two things go wrong if this is left alone. Concurrent saves can
-    // interleave and leave malformed JSON, and a process that exits with a save
-    // in flight leaves `creds.json` at **0 bytes** — a destroyed session, with no
-    // error anywhere. Both were observed on 2026-10-04.
-    //
-    // Chaining serialises the writes and gives `dispose()` a promise to await,
-    // so a clean shutdown cannot truncate the file it is trying to save.
     let pending: Promise<void> = Promise.resolve();
     const saveCredsSerialised = (): Promise<void> => {
       pending = pending.then(() => saveCreds()).catch(() => undefined);
@@ -143,8 +133,6 @@ export class NyxBaileys {
       log: this.log.child('socket'),
     });
 
-    // The reconnect plugin asks the host to rebuild rather than swapping the
-    // socket itself — one owner of the connect path.
     Object.defineProperty(sock, '__requestReconnect', {
       value: () => this.#rebuild(),
       enumerable: false,
@@ -160,9 +148,6 @@ export class NyxBaileys {
 
   /**
    * Rebuild the socket from persisted state.
-   *
-   * Unwinds every patch first so the new socket is decorated from a clean
-   * object — no wrappers stacking on wrappers across a reconnect cycle.
    */
   async #rebuild(): Promise<boolean> {
     if (this.#closed) return false;
@@ -170,9 +155,6 @@ export class NyxBaileys {
 
     this.log.info('rebuilding socket');
     this.#disposables.dispose();
-    // A throwing disposer is swallowed by `dispose()`, so any it left behind
-    // would otherwise be re-run against the *new* socket. Clear explicitly so
-    // the rebuilt socket starts from a genuinely empty unwind stack.
     this.#disposables.reset();
     this.applied.length = 0;
 
@@ -197,7 +179,6 @@ export class NyxBaileys {
 
   /** Apply every plugin, isolating failures to one plugin. */
   private async decorate(ctx: { sock: CoreSocket; state: unknown; saveCreds: () => Promise<void> }): Promise<void> {
-    const state = ctx.state as { creds: unknown; keys: unknown };
     const store = this.options.sessionStore;
     const sessionStore = store ?? new FileSessionStore({ dir: this.options.sessionDir ?? './session' });
 
@@ -215,7 +196,6 @@ export class NyxBaileys {
         this.applied.push(plugin.name);
         this.log.debug('plugin applied', { plugin: plugin.name });
       } catch (err) {
-        // One bad plugin must not take the socket down with it.
         this.log.error('plugin failed to apply', {
           plugin: plugin.name,
           err: (err as Error).message,
@@ -254,11 +234,6 @@ export class NyxBaileys {
     });
   }
 
-  /**
-   * Fan a connection event out to plugins. Plugins register here via
-   * `onConnection` rather than touching the socket, so there is one owner of
-   * the socket's `connection.update` listener.
-   */
   #connectionListeners = new Set<(phase: string, payload?: unknown) => void | Promise<void>>();
 
   onConnection(fn: (phase: string, payload?: unknown) => void | Promise<void>): () => void {
@@ -315,8 +290,6 @@ export class NyxBaileys {
     }
     this.#disposables.dispose();
     this.applied.length = 0;
-    // Ending the socket flushes a final `creds.update`. Wait for that write to
-    // land before returning, or the caller exits mid-save and truncates the file.
     await this.#pendingSave.catch(() => undefined);
     this.log.debug('disposed');
   }
@@ -330,13 +303,6 @@ export class NyxBaileys {
 export function createNyxBaileys(options: SuperOptions = {}): NyxBaileys {
   return new NyxBaileys(options);
 }
-
-/* ── back-compat aliases ────────────────────────────────────────────────
- * The project was named "Super Baileys" until v0.1.0. These aliases keep
- * existing imports working through one more release so the rename is not a
- * breaking change for anyone who already wrote `new SuperBaileys()`. They will
- * be removed in the next minor.
- */
 
 export { NyxBaileys as SuperBaileys, createNyxBaileys as createSuperBaileys };
 

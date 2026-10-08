@@ -27,6 +27,26 @@ import type { AntiSpamOptions, Plugin } from '../utils/types.js';
  * Scope: outbound pacing. It does not fabricate presence — see `docs/DESIGN-NOTES.md`.
  */
 
+/**
+ * Defaults.
+ *
+ * `minGapMs` is a **floor, not a target** — 2.5s between outbound messages is
+ * the requested pacing. `jitterMs` sits on top of it, so the effective gap is
+ * `minGapMs + random(0..jitterMs)`; it can only ever widen the gap, never
+ * shorten it below the floor. That is the whole point of keeping them separate:
+ * tuning jitter for anti-spam-fingerprint reasons must never be able to
+ * accidentally drop the floor and send messages faster than intended.
+ *
+ * `jitterMs` adds a **random** amount on top of the floor, drawn from a clamped
+ * Box-Muller distribution (`~±2.5σ` of a normal, mapped into `[0, jitterMs]`)
+ * rather than uniform. The distribution matters: uniform jitter makes gaps
+ * visibly cluster at both ends, which is as machine-like as no jitter at all.
+ * A normal keeps most gaps near the middle of the band and few at the extremes.
+ *
+ * So the default band is **2.5s–6.5s**: never faster than the floor, and never
+ * machine-regular. Callers wanting a tighter or flatter curve pass
+ * `{ jitterMs: n }` explicitly.
+ */
 const DEFAULTS: AntiSpamOptions = {
   minGapMs: 2_500,
   jitterMs: 4_000,
@@ -100,7 +120,12 @@ export function antiSpam(user: Partial<AntiSpamOptions> = {}): Plugin {
       /** Multiplier on gaps, raised when the health plugin sees bad signals. */
       let pressure = 1;
 
-      /** Box–Muller, clamped. Bounded distribution, not uniform. */
+      /**
+       * Box–Muller, clamped. Bounded distribution, not uniform.
+       *
+       * The result is always `>= minGapMs`, because `clamped` is floored at 0
+       * — jitter widens the gap and can never undercut the floor.
+       */
       const gap = (): number => {
         const u = Math.max(Number.EPSILON, Math.random());
         const v = Math.random();

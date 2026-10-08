@@ -78,12 +78,15 @@ import type { CoreSocket, Plugin } from '../utils/types.js';
  * ## Verified, and what that means
  *
  * Proven on hardware, on a paired consumer account: **quick-reply buttons
- * render and their replies route back.** Also proven: a sectioned `single_select`
- * menu does **not** render, despite arriving through the identical path with the
- * identical nodes. Only `name: 'quick_reply'` is confirmed. Treat `single_select`
- * as unverified rather than working — see `docs/VERIFICATION.md`.
+ * render and their replies route back**, as do `cta_url`, `cta_call` and
+ * `cta_copy`. An earlier revision of this file asserted that `single_select`
+ * was dropped by the server on consumer accounts. **That claim was wrong** — it
+ * was inferred from a malformed payload rather than observed, and it has been
+ * retracted in `docs/VERIFICATION.md`. The real defect was row shape; see
+ * `toInteractiveInner`, which normalises rows to `{ header, title, description, id }`.
  *
- * Everything else the chain understands passes straight through, untouched.
+ * Note the flow-name spelling: it is `cta_copy`. `copy_to_clipboard` is not a
+ * WhatsApp flow name and is silently dropped.
  */
 
 /** Content keys the upstream chain rejects but WhatsApp clients can render. */
@@ -101,7 +104,14 @@ const INTERACTIVE_KEYS = [
 ] as const;
 
 /** Flow names WhatsApp accepts on a `native_flow` node. */
-export type NativeFlowName = 'quick_reply' | 'single_select' | 'cta_url' | 'cta_call' | 'copy_to_clipboard' | 'payment' | 'location_request';
+export type NativeFlowName =
+  | 'quick_reply'
+  | 'single_select'
+  | 'cta_url'
+  | 'cta_call'
+  | 'cta_copy'
+  | 'payment'
+  | 'location_request';
 
 export interface InteractiveRow {
   title: string;
@@ -122,7 +132,7 @@ export interface InteractiveOptions {
   useCachedGroupMetadata?: boolean;
   /**
    * Force the flow name. Inferred from the content when omitted.
-   * `single_select` is **unverified** on consumer clients — see the file header.
+   * Set this to `cta_url`, `cta_call` or `cta_copy` to send a CTA flow.
    */
   flowName?: NativeFlowName;
   /**
@@ -163,7 +173,7 @@ export function interactiveKeyOf(content: unknown): string | null {
  * The flow name implied by a content key.
  *
  * A sectioned menu is `single_select`; everything else defaults to
- * `quick_reply`, the only value confirmed to render on consumer clients.
+ * `quick_reply`. CTA flows must be requested explicitly via `flowName`.
  */
 export function interactiveFlowName(key: string, options: InteractiveOptions = {}): NativeFlowName {
   if (options.flowName) return options.flowName;
@@ -289,16 +299,36 @@ export function toInteractiveInner(
   }
 
   if (key === 'listMessage') {
+    // Rows must be `{ header, title, description, id }`. Callers use `rowId`
+    // (and sometimes neither), and passing sections through verbatim produces a
+    // stanza the client accepts and then fails to render — the phantom-drop
+    // signature. Normalise here rather than trusting the caller.
+    const rawSections = (payload.sections ?? []) as Array<{
+      title?: string;
+      rows?: Array<{ title?: string; rowId?: string; id?: string; description?: string }>;
+    }>;
+
+    const sections = rawSections.map((sec) => ({
+      title: sec.title ?? '',
+      rows: (sec.rows ?? []).map((row, i) => ({
+        header: '',
+        title: row.title ?? '',
+        description: row.description ?? '',
+        id: row.id ?? row.rowId ?? `row${i}`,
+      })),
+    }));
+
     return {
-      body: { text: (payload.description as string) ?? (payload.title as string) ?? '' },
+      body: { text: (payload.description as string) ?? (payload.title as string) ?? 'Select an option' },
       ...(payload.footerText ? { footer: { text: payload.footerText as string } } : {}),
+      ...(payload.title ? { header: { title: payload.title as string, subtitle: '' } } : {}),
       nativeFlowMessage: {
         buttons: [
           {
             name: 'single_select',
             buttonParamsJson: JSON.stringify({
-              title: payload.buttonText ?? payload.title ?? 'Menu',
-              sections: payload.sections ?? [],
+              title: (payload.buttonText as string) ?? (payload.title as string) ?? 'Menu',
+              sections,
             }),
           },
         ],
@@ -314,10 +344,9 @@ export function toInteractiveInner(
 /**
  * Render a sectioned menu as a numbered plaintext message.
  *
- * `single_select` is dropped by the server on consumer accounts, so the useful
- * question is not "how do I make the list render" but "what is the best thing to
- * send instead". A numbered list preserves both the grouping and the reply
- * affordance, and it survives being read by any client.
+ * This is the `listFallback: 'text'` path: a send that works on every client
+ * regardless of native-flow support. A numbered list preserves both the
+ * grouping and the reply affordance.
  *
  * WhatsApp's own dialect: `*bold*` for headings, and the box drawing is plain
  * text so it needs no monospace to stay aligned. Rows are numbered across the
@@ -395,8 +424,8 @@ export function interactive(options: InteractiveOptions = {}): Plugin {
             return (async () => {
               if (mode === 'throw') {
                 throw new Error(
-                  'listMessage is dropped by the server on consumer accounts; ' +
-                    'use listFallback: "text" to send a numbered menu instead',
+                  'listFallback is "throw": refusing to send the listMessage. ' +
+                    'Use listFallback: "text" to send a numbered menu instead',
                 );
               }
               const text = formatListAsText(menu);
