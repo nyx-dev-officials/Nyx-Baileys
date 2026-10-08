@@ -32,7 +32,12 @@
     "./cli": "./dist/cli/index.js",
     "./cli/*": "./dist/cli/*.js",
     "./toolkit": "./dist/toolkit/index.js",
-    "./toolkit/*": "./dist/toolkit/*"
+    "./toolkit/*": "./dist/toolkit/*",
+    "./features": {
+      "types": "./dist/features/index.d.ts",
+      "import": "./dist/features/index.js"
+    },
+    "./features/*": "./dist/features/*.js"
   },
   "bin": {
     "nyx-baileys": "./bin/nyx-baileys.js"

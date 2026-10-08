@@ -17,6 +17,55 @@ export const DEFAULT_BROWSER: readonly [string, string, string] = [
   '0',
 ];
 
+/**
+ * Reject browser tuples the server closes on, before the socket dies.
+ *
+ * ## Why this guard exists
+ *
+ * Since ~2026-06-30 the WhatsApp server rejects a handshake advertising
+ * `webSubPlatform = WIN32`, closing the socket with a **428 roughly 200-600 ms
+ * after connect, before any QR is emitted**. That timing is what makes it
+ * expensive to diagnose: there is no pairing attempt to inspect, just a socket
+ * that never opens and no error pointing at the cause.
+ *
+ * Upstream fixed this on `master` by mapping `Windows` to `WIN_HYBRID`, but
+ * that fix is **not in rc14** — rc14 still ships `WIN32`. Our install is rc14,
+ * so we inherit it.
+ *
+ * ## Why our own default is safe
+ *
+ * rc14 only selects a non-`WEB_BROWSER` platform when **both** hold:
+ *
+ * ```js
+ * config.syncFullHistory
+ *   && PLATFORM_MAP[config.browser[0]]   // only 'Mac OS' and 'Windows' are keys
+ *   && config.browser[1] === 'Desktop'
+ * ```
+ *
+ * `DEFAULT_BROWSER` is `['Chrome','120','0']` — `'Chrome'` is not a key, so
+ * `webSubPlatform` stays `WEB_BROWSER` and pairs fine. The hazard appears only
+ * when a caller opts into `Browsers.windows('Desktop')` together with
+ * `syncFullHistory`, which is exactly what someone would do to request full
+ * history sync. This refuses that combination up front.
+ */
+export function assertBrowserIsSafe(
+  browser: readonly [string, string, string],
+  syncFullHistory: boolean,
+): void {
+  // The guard is only reachable when both upstream conditions hold.
+  if (!syncFullHistory) return;
+  if (browser[1] !== 'Desktop') return;
+
+  if (browser[0] === 'Windows') {
+    throw new Error(
+      'browser "Windows/Desktop" with syncFullHistory advertises webSubPlatform=WIN32, '
+      + 'which WhatsApp rejects with a 428 before any QR is emitted. Use the default '
+      + 'Chrome/WEB_BROWSER tuple for full history sync, or upgrade past rc14 where '
+      + 'upstream maps Windows to WIN_HYBRID.',
+    );
+  }
+}
+
 /** WebSocket + keepalive tuning. Conservative defaults, high maxPayload. */
 export interface SocketTuning {
   connectTimeoutMs: number;
@@ -123,6 +172,10 @@ export async function createCoreSocket(args: CreateSocketArgs): Promise<CoreSock
   const { state, saveCreds, options, log, tuning = {}, printQRInTerminal = true } = args;
   const t: SocketTuning = { ...DEFAULT_TUNING, ...tuning };
   const browser = options.browser ?? DEFAULT_BROWSER;
+
+  // Refuse the WIN32 handshake *before* connecting — otherwise the socket dies
+  // with a 428 a few hundred ms in, before any QR, with nothing to point at it.
+  assertBrowserIsSafe(browser, options.syncFullHistory === true);
 
   log.debug('creating socket', { browser, maxPayload: t.maxPayload });
 
