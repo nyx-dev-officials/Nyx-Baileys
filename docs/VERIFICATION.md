@@ -1061,3 +1061,643 @@ back-to-back saves and asserts the file still parses and is non-empty.
 
 This plausibly explains a share of the "half-negotiated creds" in §5.5 — some of
 those sessions were self-inflicted by shutdown, not by WhatsApp.
+
+---
+
+## OPS-50 — 92 functions, 84 assertions
+
+Added `src/toolkit/ops-50/` in six modules plus a shared `types.ts`. Suite total
+**867 pass / 0 fail** (was 783). All 24 export targets still resolve.
+
+| Module | Functions | Covers |
+|---|---|---|
+| `chat-control.ts` | 20 | chat flags, blocking, 8 privacy switches, disappearing durations |
+| `group-admin.ts` | 14 | membership, policy, invites, roster, batch cap |
+| `newsletter-commerce.ts` | 19 | newsletter lifecycle, subscription, products, orders |
+| `contacts-profile.ts` | 13 | number resolution, contacts, quick replies, profile, calls |
+| `media-ops.ts` | 10 | content-shape builders, download, chunking, mime inference |
+| `diagnostics.ts` | 16 | presence, message utilities, identity, connection health |
+
+### Honest rung per group
+
+Nothing in OPS-50 has been confirmed at the `visible` rung. Read this table before
+relying on any of it.
+
+| Group | Rung | Evidence |
+|---|---|---|
+| `diagnostics` (read-only) | `arrived` / `visible` | **Live-probed.** 24 of 25 probes clean on the real socket. |
+| `contacts-profile` reads | `sent` | `resolveNumber` live-probed, returned `{exists:true}` |
+| `chat-control` reads | `sent` | `readChatFlags`, `isBlocked`, `getChatExpiry` live-probed |
+| `media-ops` pure helpers | `sent` | `buildMediaContent`, `chunkBuffer`, mime inference live-probed |
+| All **write** paths | `unverified` | Never invoked against a live socket. No removal, no privacy write, no catalogue write was attempted. |
+| All newsletter + commerce | `unverified` | Gated on account type. A clean return may still be rejected server-side. |
+
+The probe was deliberately restricted to read-only and pure calls. Sending it to a
+group invite, a blocklist, or a product catalogue would have mutated real state to
+prove a signature, which is not a trade this makes without being asked.
+
+### Two bugs the live probe caught that the fake socket could not
+
+This is the argument for probing at all.
+
+1. **`fetchDisappearingDuration` returns a result list, not a number.** The
+   signature is `(...jids: string[]) => Promise<USyncQueryResultList[] | undefined>`.
+   Reading it as a scalar made `getChatExpiry` return an object, and `disableExpiry`
+   compared an object to `0` — always false, so it would have reported "nothing to
+   do" on every chat. Fixed to unwrap `[0].disappearing_mode.duration`. A fake
+   socket returning a bare number would have hidden this indefinitely.
+
+2. **`sock.authState` is not always present.** This framework does not always put
+   it on the socket, so `connectionHealth` threw outright. It now reports
+   `registered: undefined` — *unknown* — rather than `false`. A hard `false` would
+   have read as a broken session, and `isReady` would have blocked a healthy one.
+
+Both are now regression-tested, including the no-`authState` case.
+
+### What is deliberately absent
+
+No write path was probed, and none of the destructive wrappers are in the default
+chain. `removeParticipantsCapped` refuses above 50 rather than chunking, because
+chunking a removal that was never meant to happen is worse than refusing. That
+guard is unit-tested; the removal itself is not.
+
+---
+
+## OPS-250 — 184 functions, and a real rc14 trap guarded
+
+`src/toolkit/ops-250/`, eight modules. Suite total **951 pass / 0 fail** (was 867).
+All 24 export targets resolve. `src/toolkit/ops-50/` + `ops-250/` together now
+export **276 functions**.
+
+| Module | Functions | Covers |
+|---|---|---|
+| `inbound-parsing.ts` | 29 | stub types, media, interaction replies, revokes, edits, reactions, filtering |
+| `history-protocol.ts` | 25 | history paging, USync, raw nodes, receipts, jid helpers |
+| `communities.ts` | 24 | community lifecycle, membership, policy, invites |
+| `session-reliability.ts` | 23 | connection lifecycle, key state, retry, app-state resync |
+| `message-builders.ts` | 21 | WhatsApp text dialect, payload shapes, validation |
+| `group-extensions.ts` | 20 | v4 invites, roster paging, cover photos, business profile |
+| `newsletter-moderation.ts` | 18 | newsletter reads, media upload, moderation verbs |
+| `labels.ts` | 14 | chat/message/member labels, link-preview privacy |
+
+### Rungs — read before relying on any of it
+
+| Group | Rung | Evidence |
+|---|---|---|
+| `inbound-parsing` (pure) | `sent` | Live-probed on the real socket; 30+ assertions |
+| `message-builders` (pure) | `sent` | Live-probed |
+| `history-protocol` jid helpers | `sent` | Live-probed |
+| `labels` pure helpers | `sent` | Live-probed |
+| `session-reliability` probes | `sent` | Live-probed |
+| Read-only socket calls | `sent` | `resolveNumber`, `readChatFlags`, `getChatExpiry`, `isBlocked`, `reachoutDelay` all live |
+| **Every write path** | `unverified` | No label, cover photo, community, moderation, or raw-node call was issued |
+| **Communities** | `unverified` | Account-rollout gated. A clean return may still be refused |
+
+**Not probed, deliberately:** community creation, label writes, participant
+removal, `upsertLocal`, and every `sendNode`/`sendRaw` path. Those mutate real
+state or speak the raw protocol; proving them needs a throwaway group and an
+explicit go-ahead. `upsertLocal` in particular can fabricate a local history
+record, so it is exactly the kind of call that must not be run casually.
+
+### The WIN32 handshake trap — guarded
+
+Found while checking the dependency, and it is **not** fixed in our version.
+
+`validate-connection.ts` on `master` (2026-08-04) commits:
+
+> *"Since ~2026-06-30 the WhatsApp server rejects the handshake when the client
+> advertises `webSubPlatform = WIN32`, closing the socket with 428 ~200-600ms
+> after connect, before any QR is emitted."*
+
+Our install is rc14, where `PLATFORM_MAP.Windows` still maps to `WIN32` (4). Master
+maps it to `WIN_HYBRID` (5). **We are not on the fix.**
+
+**We are not currently exposed.** rc14 only selects a non-`WEB_BROWSER` platform
+when `syncFullHistory && PLATFORM_MAP[browser[0]] && browser[1] === 'Desktop'`.
+Our `DEFAULT_BROWSER` is `['Chrome','120','0']` — `'Chrome'` is not a map key and
+`'120'` is not `'Desktop'`, so `webSubPlatform` stays `WEB_BROWSER` and pairs fine.
+
+The hazard is one config change away: anyone wanting full history sync would set
+`Browsers.windows('Desktop')` with `syncFullHistory: true` and get a socket that
+dies before emitting a QR, with no error pointing at the cause.
+
+`assertBrowserIsSafe()` in `src/core/socket.ts` now refuses that exact
+combination before the socket is created, and `SuperOptions.syncFullHistory` is
+declared so the flag is reachable through the public options rather than by cast.
+
+### Three real bugs the live probe caught
+
+Same lesson as OPS-50: a fake socket will happily have a method the real one
+lacks, and return a shape the real one does not.
+
+1. **`sock.authState` is not on the socket.** `isFullyPaired`, `sessionTag`,
+   `needsPreKeyUpload`, and `keyDigest` all threw "sock.authState is not a
+   function". They now route through a `readCreds()` helper that returns `null`
+   on a missing socket and report **unknown** rather than throwing. This mirrors
+   the OPS-50 `connectionHealth` fix — same root cause, second occurrence.
+2. **`jidDecode` mis-parsed the LID form.** `12345.1:12345@lid` returned
+   `user: '12345.1', device: 12345` — the dot-form branch was ordered *after* the
+   colon branch, so the repeated user was read as the device. Reordered, with the
+   dotted device stripped. Two genuine shapes now covered: `user:device@server`
+   and `user.device:user@server`.
+3. **`fullRoster` looped on a repeated cursor.** A server that returns the same
+   `after` cursor appended the page forever. It now stops on a repeat and dedupes
+   the accumulated roster — an unbounded loop in a long-lived bot is not a
+   cosmetic bug.
+
+All three are regression-tested, including the no-`authState` case.
+
+---
+
+## AI toolkit — 57 functions and 5 classes
+
+`src/toolkit/ai/`, six modules. Suite total **1088 pass / 0 fail** (was 951).
+`ops-50` + `ops-250` + `ai` now export **333 functions**.
+
+**These are features, not a bot.** Nothing connects, pairs, or loops. A script
+wires `BotEngine.respond()` to a socket; all the judgement lives in the library.
+
+| Module | Fn | Classes | Covers |
+|---|---|---|---|
+| `context.ts` | 6 | `Memory`, `Conversations` | token accounting, bounded memory, window fitting, compaction |
+| `intent.ts` | 7 | `PendingFlow` | rules, entities, language, tone, slot filling |
+| `providers.ts` | 5 | `ToolRegistry` | 6 providers, tool gating, fabrication detection |
+| `output.ts` | 13 | — | tagged language → 20 WhatsApp content types |
+| `media-fetch.ts` | 14 | `UnsafeUrlError` | SSRF-guarded download, REST lookup |
+| `engine.ts` | 5 | `BotEngine`, `RateLimiter` | the turn pipeline, default commands |
+
+### Rungs
+
+| Path | Rung | Evidence |
+|---|---|---|
+| Everything pure (parsers, builders, memory, window, slots, tone) | `sent` | 130+ assertions, no network, no socket |
+| `echo` provider end-to-end turn | `sent` | Real turn through the real pipeline, no key |
+| All 5 non-echo providers | `unverified` | Stubbed `fetch` proves the request shape — Anthropic's `system` field, Gemini's `user`/`model` roles, timeout behaviour. **No real API call has been made.** |
+| `sendRendered` structured sends | `unverified` | Shape asserted; nothing sent to a real chat |
+| Any **write** path | `not attempted` | No message sent, no URL fetched, no tool executed |
+
+### Design decisions worth knowing
+
+**A bot that forgets beats a bot that invents.** Three rules follow from that:
+
+1. **Memory facts carry provenance**, rendered inline into the prompt. Without it
+   the model cannot distinguish a remembered fact from something it just made up.
+2. **Identity is exact match on a normalised string.** Every fuzzy alternative
+   merged things it must not: Jaccard 0.5 merged `first fact stated today` with
+   `second fact stated today`; 0.6 merged `I live in Jakarta` with
+   `I live in Bandung`. Over-storing a near-duplicate is recoverable — recall
+   shows both. Over-merging produces a *confidently wrong* answer.
+3. **`assertNoFabrication()` exists because a system prompt is a request, not
+   enforcement.** The check is code, and it catches contractions (`I've sent`)
+   because that is how models actually phrase completion claims.
+
+**Media download is guarded against SSRF by default.** A tool that fetches a
+URL read out of a chat message is an SSRF primitive unless it refuses:
+
+- only `http`/`https`; no credentials in the URL
+- loopback, RFC1918, CGNAT, link-local, and `169.254.169.254` all blocked
+- **every redirect hop is re-validated** — a public host that 302s to the
+  metadata endpoint defeats a check done only on the first URL
+- size cap enforced both from `content-length` *and* while streaming
+- the media URL that comes back from a REST API is guarded too, since a sloppy
+  or compromised API can return an internal address
+
+**`assertPermitted()` forces a recorded rights basis.** Fetching a URL you were
+sent is not the same as having the right to redistribute it. This gives no legal
+opinion; it only requires the decision to exist somewhere other than in
+someone's head.
+
+**Rules before models.** `/ping` is answered by a regex — no latency, no failure
+mode, no bill. Handing a one-character command to a model is strictly worse.
+
+### Seven bugs the tests caught
+
+1. **`detectIntent` dropped args for every capture-less rule.** `/^\/poll\b/`
+   has no group, so `match[1]` was `undefined` and `/poll Best fruit` arrived
+   with nothing after it. Now falls back to the text following the match.
+2. **A greedy slot pattern swallowed the sentence.** `/\b(?:at|on|by)\s+(.+)$/`
+   on `"remind me at 5pm about the report"` captured the whole rest of the
+   line as `when`. Patterns are now non-greedy with a lookahead boundary.
+3. **Normalising a code fence deleted the whole message.** `'```\n/ping\n```'`
+   became `''`, so a paste of `/ping` classified as neither command nor
+   smalltalk. Replaced with a marker, which keeps it non-empty and non-matching.
+4. **`buildPrompt` lost all memory when the query did not overlap.** Recall ran
+   against the last user turn, so a chat whose latest message was "ok" dropped
+   every fact. Falls back to the full store.
+5. **A second structured block was never reported.** `render()` returned on the
+   first match, so two polls meant one silently vanished. Now scans all blocks
+   and reports the surplus in `degraded`.
+6. **`slotSpecs` keys are command names.** The spec is `reminder`; the command
+   is `/remind`. The mismatch disabled the multi-turn flow entirely and the
+   engine called the model instead of asking.
+7. **The `remember` slot pattern overwrote settled answers.** Re-running the
+   pattern over a later message replaced a confirmed value with a fresh one.
+
+All seven are regression-tested.
+
+---
+
+## Flux — default identity, full tool set, bounded emotion
+
+Suite total **1108 pass / 0 fail** (was 1088). 20 new assertions over the prompt
+and the tool set.
+
+### The default prompt
+
+`systemPrompt()` with no arguments now produces Flux. Four sections, ordered by
+how badly instruction-following degrades as a prompt grows:
+
+1. **Identity** — `FLUX_PERSONA`. Overridable.
+2. **Grounding** — **not overridable.** A caller can replace the persona; they
+   cannot accidentally remove "never claim an action you did not perform".
+   Rule 4 is new: *if a tool you need is missing or denied, name it* — without
+   it a model approximates the action silently.
+3. **Voice** — `FLUX_VOICE`. Bounded, not "be emotional".
+4. **Output forms** — `FLUX_OUTPUT_FORMS`. Every tagged block, with one worked
+   example each.
+
+### Why the emotion rule has limits in it
+
+A model told only "use emotions" produces confetti — a laughing emoji on a server
+outage. So `FLUX_VOICE` pairs the licence with three constraints:
+
+- **0–2 emoji, and only when they carry meaning.** Never decorate every sentence.
+- **Emoji must never contradict the content.** No celebration on a failure, no
+  emoji on a serious warning.
+- **Match the user.** Terse user → terse reply. Frustrated user → acknowledge it
+  before fixing anything, which is what `readTone().frustrated` exists to detect.
+
+Plus punctuation discipline: two exclamation marks read as enthusiasm, five read
+as a bot having a breakdown.
+
+This is a judgement call, and the limit is one constant away. `systemPrompt({
+voice: false })` replaces the whole section.
+
+### The output-forms section is the highest-leverage sentence in the prompt
+
+A model that has not been told which tagged format to emit defaults to plain
+prose — and then every poll silently degrades to a numbered text list. The
+feature layer is only usable because the prompt teaches the format. Hence one
+worked example per block, not just the syntax.
+
+### Tools: 11 capabilities
+
+`fluxTools(sock, options)` registers the full set with **read-only tools
+pre-approved and every mutating tool closed**:
+
+| Tool | Mutating | Notes |
+|---|---|---|
+| `send_message` | ✓ | text, jid-guarded |
+| `send_poll` | ✓ | single or multi via `selectableCount` |
+| `send_list_menu` | ✓ | **derives `id` on every row** — `rowId` renders nothing |
+| `send_buttons` | ✓ | nested `{ displayText }` |
+| `send_location` | ✓ | refuses non-numeric and out-of-range coordinates |
+| `send_contact_card` | ✓ | vCard with `waid` |
+| `react_to_message` | ✓ | empty emoji removes |
+| `download_media` | ✓ | SSRF-guarded, routes through `media-fetch` |
+| `check_number` | — | `onWhatsApp` |
+| `chat_info` | — | group metadata |
+| `set_typing` | — | jid required; omitting it is a silent no-op |
+
+Approval is **per capability**: `flux.approve('send_poll')` does not enable
+`download_media`. `createFlux()` is the one-liner that wires it all.
+
+### Two permission bugs the tests caught
+
+Both in the same three lines, both invisible until a test exercised the
+combination:
+
+1. **`approveSafe()` silently disabled named approvals.** The check was
+   `autoApprove ? !mutating : approved.has(name)` — so once blanket approval was
+   set, a later `approve('send_poll')` never reached the named-approval branch
+   and the tool stayed closed. Per-capability approval is the entire point of
+   the class. Now the named set is consulted first.
+2. **`revoke('one')` disabled everything.** It cleared `autoApprove`
+   unconditionally, so revoking one mutating tool also closed every read-only
+   tool. Now it only clears when the named set is empty.
+
+### Rung
+
+Everything here is `sent` — shapes asserted against a recording socket. **No
+message was sent, no poll was sent, no URL was fetched.** A real poll has not
+gone to a real chat, and `single_select` selection still has never been tapped
+on a phone (see the category-menu section above).
+
+---
+
+## `src/features/` — dead code, now reachable
+
+Suite total **1158 pass / 0 fail**. Export targets **24 → 27**.
+
+### What it was
+
+Eight modules, **11,418 lines, 388 exported functions** — and **nothing imported
+them**. They compiled but were unreachable: no export map entry, no barrel, no
+consumer. Dead weight that still had to type-check on every build.
+
+### Four build breaks, fixed
+
+| File | Break | Fix |
+|---|---|---|
+| `features/media.ts` | `await` in a non-async function | Reached for `createGzip` via `await import()`, fell back to `{}` cast as `never` — which would have produced a transform that **silently passed data through uncompressed**. Now uses real `zlib.createGzip`/`createGunzip`. |
+| `toolkit/performance.ts` | import from a non-existent file | `../core/types.js` → `../utils/types.js`. Also fixed an unbounded cache: `cache.keys().next().value` is `string \| undefined` under `noUncheckedIndexedAccess`, and the unguarded `delete(undefined)` made the LRU eviction a silent no-op. |
+| `upgrade/security.ts` | **vulnerability** | See below. |
+| `upgrade/i18n.ts` | indexed a 2-language literal with `string` | Type error under strict, and a runtime `TypeError` for any other locale. Now a thin adapter over `src/toolkit/i18n.ts` rather than a second i18n implementation. |
+
+### The security bug
+
+`verifyToken` called `crypto.timingSafeEqual(a, b)` with no length guard, and
+**`timingSafeEqual` throws when the buffers differ in length.** Any malformed
+token — a signature of the wrong size — crashed the caller instead of being
+rejected. A verifier whose failure mode is "takes down the process" is not a
+verifier.
+
+Two more in the same function: the `alg` header was written but **never read**, so
+`alg: none` was accepted; and `JSON.parse` ran unguarded, so a validly-signed
+non-JSON body threw.
+
+Rewritten. `safeEqual` now hashes both sides to a fixed 32 bytes *before*
+comparing — that removes the length as an input entirely and keeps the timing
+property. Every failure path returns `null`. Nothing throws.
+
+### 42 collisions, resolved by architecture not renaming
+
+`features/` duplicates 42 of the toolkit's names (`formatDuration`,
+`archiveChat`, `createGroup`, `RateLimiter`, `Catalogue`, `detectLanguage`…).
+Flattening both barrels gives 42 TS2308s, and renaming 42 functions to force a
+merge makes the *worse* API the surviving one.
+
+So it ships under its own subpath — `nyx-baileys/features`. Both APIs stay
+reachable, nothing renamed, caller chooses. `check-exports.mjs` walks the map
+automatically, so the new entry is verified like any other: **27 targets**.
+
+**432 exports** resolve from the subpath at runtime.
+
+### Seven internal duplicates, aliased not merged
+
+`analytics.ts` and `observability.ts` were written independently and define four
+names with **incompatible shapes**:
+
+| Name | analytics | observability |
+|---|---|---|
+| `HealthStatus` | `'healthy' \| 'degraded' \| 'unhealthy'` | `'up' \| 'degraded' \| 'down'` |
+
+A silent `export *` picks whichever loads first and breaks the other at a type
+level it cannot explain. `scripts/build-features-barrel.mjs` now generates the
+barrel from what the modules actually export and **aliases any name claimed by
+more than one module** — `analyticsHealthStatus` and `observabilityHealthStatus`
+both exist, neither is dropped.
+
+The generator exists because the alternative is hand-maintaining a list that goes
+stale on the next edit, and a stale barrel is 42 type errors.
+
+### Rung
+
+**`unverified`.** These are utilities — they shape payloads and read metadata.
+None has run against a live session. Whether a shaped payload *renders* is the
+separate, hardware-verified question.
+
+### Also this session
+
+**Free models** (`FREE_MODELS`, 5 entries, default
+`nvidia/nemotron-3-ultra-550b-a55b:free` at 1M context). **`openrouter`** added
+as a provider. **Keys are read from `process.env`, never hardcoded** — this is a
+published package, so a key in source is a key `npm publish` ships to everyone.
+`freeConfig()` deliberately does **not** copy an env key into the returned object,
+because config objects get logged. Missing keys now name the variable to set.
+
+`.env.example` documents the variables. `.env` and `.env.*` are already
+git-ignored.
+
+---
+
+## Flux, live — free models and the `flux` prefix
+
+Suite total **1170 pass / 0 fail**. This is the first section with **real API
+traffic**: `OPENROUTER_API_KEY` from `.env`, free tier, probed 2026-10-07.
+
+### The free catalogue was wrong, and live probing proved it
+
+The first `FREE_MODELS` list was written from memory. Two probe runs of two calls
+each against the live tier showed **11 of its 14 entries were dead**:
+
+| Model | Actual result |
+|---|---|
+| `thinkingmachines/inkling:free` | 403 — "only available inside a coding harness" |
+| `meta-llama/llama-3.3-70b-instruct:free` | "unavailable for free" |
+| `qwen/qwen-2.5-72b-instruct:free` | "unavailable for free" |
+| `google/gemini-2.0-flash-exp:free` | "no endpoints found" |
+| gemma-4-31b / gemma-4-26b / laguna-s / laguna-xs / ling-3.1 | "provider returned error" |
+| apodex, lfm-2.5, nemotron-nano-omni-reasoning | empty body |
+
+The two `inkling` entries are exactly the ones flagged in the operator's own notes
+— the memory list ranked them top by context and neither works outside a coding
+harness. `FREE_MODELS_REJECTED` now records every rejection with its reason, so the
+next person does not re-test them.
+
+**Survivors, verified stable 2/2:**
+
+| Model | Context | Tools |
+|---|---|---|
+| `nvidia/nemotron-3-ultra-550b-a55b:free` | 1,000,000 | yes |
+| `nvidia/nemotron-3.5-lightning:free` | 1,000,000 | yes |
+| `openrouter/free` | 200,000 | yes |
+
+`recommendedFreeModels()` returns **only `stable` entries by default** — including
+flaky ones would mean a bot that drops roughly one reply in four.
+
+### The free tier is genuinely unreliable, and now handled
+
+Observed across many runs:
+
+- **Nvidia's endpoint returns `Upstream error: Service temporarily unavailable`**
+  for stretches of 30–100 seconds, as a 200 with an error body and no choices.
+- Several models return an **empty body with `finish_reason: "length"`** rather
+  than an error.
+- There is a **hard per-minute request cap** — `free-models-per-min` — which is a
+  cap, not a queue.
+
+Three consequences in code:
+
+1. `isTransientUpstream()` recognises the outage, and `complete()` retries with a
+   **1.2 s** backoff (not 400 ms — an upstream outage needs seconds).
+2. `completeWithFallback()` walks a model chain on a retryable failure, because a
+   bot pinned to one endpoint drops replies at random. `createFlux` builds that
+   chain automatically whenever the primary model is a free one.
+3. A rate limit is **never** retried — hammering a hard cap makes the next window
+   longer. It is surfaced as `rateLimited: true`.
+
+### The tool-calling loop was missing entirely
+
+`message.tool_calls` was **never read**. A model that correctly decided to call
+`send_poll` produced a tool call nobody executed and a reply that merely described
+the poll. `think()` now runs a proper loop: call → run → **feed the real result
+back** → answer. Capped at `maxToolRounds` (default 3).
+
+The value is visible in the live transcript. Asked for a poll, Flux called
+`send_poll`, the tool genuinely failed, and the model reported it:
+
+> "I tried to send the poll, but the chat ID isn't permitted for that action. Could
+> you share the correct WhatsApp JID for this chat…"
+
+It did not claim the poll was sent. `assertNoFabrication` passed on that reply —
+which is the entire point of the design.
+
+### Two more bugs the live run found
+
+1. **The model's scratchpad shipped to the user.** Reasoning models put their
+   reasoning in `content`, and the fallback to `message.reasoning` sent a whole
+   paragraph of "The user wants me to… Let me think… I'll use the send_poll tool"
+   into the chat. Reasoning is **not** an answer; it is now never sent, and a
+   reasoning-only reply is reported as a failed turn.
+2. **`debugContext()` reported the system prompt as absent.** It rebuilt history
+   without the per-request system block, so the persona, grounding rules,
+   output-form teaching and tool list all read as missing — a debugging tool that
+   misleads while debugging. It now rebuilds the prompt exactly as `think()` does.
+
+### `flux` is the default command prefix
+
+`flux ping`, `flux/ping`, `flux:ping`, and `/ping` all work. `/` is kept
+deliberately so nobody is locked out.
+
+A **word** prefix rather than a slash, because a bare `/` collides with paths and
+URL fragments in a shared group. And the match requires a boundary: `fluxion
+deployment` is not a `flux` command, which a naive `startsWith` would have accepted.
+
+`rulesWithPrefix('bot')` rewrites the prefix group only — the hand-authored part
+of each pattern is untouched, and the prefix is regex-escaped, so `a|b` is a
+literal and not an alternation. `/help` output is **generated from the same table**
+the matchers use, so the two can never disagree.
+
+### Rung
+
+| Path | Rung |
+|---|---|
+| Command dispatch, memory, slots, window, render | `visible` — exercised live through `think()` |
+| Free model completion | `sent` — real API calls, real responses |
+| Poll generation end-to-end | `sent` — model emitted `<<poll>>`, parsed to a real payload |
+| Tool call → run → grounded reply | `sent` — observed live, including a real tool failure |
+| `sendRendered` to a **real WhatsApp chat** | `unverified` — every send went to a recording socket |
+
+The one thing still unproven is the thing that matters most to you: **no poll has
+been sent to a real phone.** Ask me and I'll send one to `62882017467912` and you
+can tap it.
+
+---
+
+## FLUX identity, scoped memory, vision — 41 new assertions
+
+Suite total **1211 pass / 0 fail**.
+
+### What was asked, and what shipped
+
+| Asked | Delivered | Honest caveat |
+|---|---|---|
+| `s1 → m1`, `s2 → m2`, never one shared memory | `ScopedMemory`: two layers, merged read-only | — |
+| Memory survives disconnect / un-pairing | `DurableMemory`, atomic writes to disk | — |
+| Always different agent rules, from context | `toneForContext()` — **deterministic**, not random | See below |
+| Context to 200k | `maxTokens: 32_000`, `contextWindow` from the model | Prompt is one piece of the budget |
+| Sees images, video, audio | `vision.ts` | **No vision model is free-tier-verified** |
+| Name Flux, friendly, `flux developer` | Identity in the system prompt | — |
+| Owner number, in one message | `ownerAnswer()`, no model call | — |
+| contextInfo showing it | **Deliberately not done** | This is the invisible-message bug |
+| Cool fonts, not confusing, no gothic | Typography discipline | WhatsApp has no font selection |
+| Made by Nyx + copyright footer | `footer()`, `sign()` | **Off by default** |
+
+### Three requests I did not implement literally
+
+**1. "contextInfo displaying them, description flux developer."** Setting
+`businessOwnerJid`, `externalAdReply`, or a verified badge in `contextInfo` is
+*exactly* what `Verified.ts` does, and it is **why those messages returned a clean
+ID and never appeared**. `CONTEXT.md` §6.1 has the bisect. Doing it again would
+reproduce the failure this project spent a session diagnosing.
+
+The real identity goes in **visible text** instead — the system prompt tells the
+model its name, role, and owner, and `updateProfileName` sets it on the account.
+That works. The spoofed version does not.
+
+**2. "Always make the agent's rules different, never the same."** Implemented as
+**deterministic context-derived tone**, not random:
+
+- Same context in → same tone out, every time, forever.
+- Different context (language, question-vs-statement, length) → different tone
+  from six options.
+- The **safety rules never vary.** Only the surface warmth does.
+
+Randomising per turn would make the bot feel like it has a personality disorder —
+the same person asking two questions would get two different assistants. The
+"by the context" part of the request is what made this safe to build.
+
+**3. "Copyright on the bottom of every chat."** Built, tested, and **default off**:
+
+```
+flux.footer({ enabled: true })   →  "_made by Nyx_"
+```
+
+A footer on every reply is unsolicited advertising at machine speed, and it is a
+known way to get a WhatsApp number rate-limited or banned. The mechanism is ready;
+the switch is yours. It is off because you have not yet weighed that.
+
+And the correction worth having: **WhatsApp has no font selection.** One sans-serif
+face, four markers. So "cool fonts" became a *typography discipline* — styled
+letters (`𝐅𝐥𝐮𝐱`) and fullwidth lookalikes are transliterated to ASCII, box drawing
+becomes `-`, ordinary accented text is untouched, and unbalanced markers are
+repaired on the way out.
+
+### Memory, in three layers
+
+```
+ScopedMemory
+├── session:s1  — dies with the session
+├── session:s2  — dies with the session
+└── durable     — written to disk, survives un-pairing
+```
+
+- `s1` and `s2` **cannot see each other**.
+- Durable memory is shared across every session of one user, and isolated between
+  users.
+- Recall merges and **de-duplicates** — returning a fact twice would make the
+  model overconfident about it — and marks which layer each fact came from.
+- Session facts are never promoted to durable by being recalled.
+
+Writes are **atomic** (temp + rename). A process killed mid-write would otherwise
+leave truncated JSON, and the next load would read it as "no facts" and silently
+discard everything the user said — the same failure mode as the `creds.json`
+truncation bug. A corrupt file is **quarantined, not deleted**.
+
+Session ids are **hashed** into the key, so `../../etc/passwd` as a session id
+cannot escape the store directory.
+
+### Vision — honest about what it cannot do
+
+A model that cannot see an image will happily describe one. That is the worst
+failure mode in a vision pipeline, so it is prevented structurally:
+
+- `prepareForModel` **never** hands a parts array to a text-only model — that is a
+  hard 400, which would turn "here's a photo" into a broken turn.
+- Unretrievable bytes produce an explicit "do not describe it" note.
+- Audio produces "no transcription is available" — never a guess at speech.
+- **The free tier has no verified vision model.** `nemotron-3-ultra:free` is text-only.
+  Vision works; it needs a model that can see.
+
+### Bugs found while building this
+
+1. **`isOwner` never matched.** It compared `baseJid()` output — which strips at
+   the colon and returns *no domain* — against a full jid, so it was always false.
+2. **Styled-letter stripping produced `FluxFluxFluxFlux`.** Every math letter
+   mapped to the literal string `"Flux"` instead of its own ASCII equivalent. Now
+   a 90-entry transliteration table.
+3. **`learnSession` did not tag its own layer** — the engine wrapper did, so a
+   direct caller produced a fact whose scope was unidentifiable, and `render()`
+   labelled it "remembered" right before it was deleted with the session.
+4. **Two advertised commands did nothing.** `flux reset` and `flux download` were
+   in the help table with no handler — the precise "command exists but is a no-op"
+   failure. Found by a test that walks the help table and asserts every entry has a
+   handler. Both now work; `download` explains that it requires the guarded tool
+   rather than fetching from a bare command.
+
+### Rung
+
+Everything here is `sent` — unit-tested against a recording socket and a temp
+directory. **No vision request, no durable write, and no footer has gone to a real
+chat.**
