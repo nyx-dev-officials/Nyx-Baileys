@@ -3,7 +3,7 @@
 [![npm](https://img.shields.io/npm/v/nyx-baileys?style=flat-square&labelColor=1a1a1a&color=4ade80)](https://www.npmjs.com/package/nyx-baileys)
 [![license](https://img.shields.io/npm/l/nyx-baileys?style=flat-square&labelColor=1a1a1a&color=60a5fa)](./package.json)
 [![node](https://img.shields.io/badge/node-%3E%3D20-5FA04E?style=flat-square&labelColor=1a1a1a&color=22d3ee)](https://nodejs.org)
-[![tests](https://img.shields.io/badge/tests-631%20passing-22c55e?style=flat-square&labelColor=1a1a1a&color=22c55e)](./docs/VERIFICATION.md)
+[![tests](https://img.shields.io/badge/tests-1288%20passing-22c55e?style=flat-square&labelColor=1a1a1a&color=22c55e)](./docs/VERIFICATION.md)
 [![upstream](https://img.shields.io/badge/upstream-baileys%20rc14-a78bfa?style=flat-square&labelColor=1a1a1a&color=a78bfa)](https://github.com/WhiskeySockets/Baileys)
 [![ci](https://github.com/nyx-dev-officials/Nyx-Baileys/actions/workflows/ci.yml/badge.svg)](https://github.com/nyx-dev-officials/Nyx-Baileys/actions/workflows/ci.yml)
 [![last commit](https://img.shields.io/github/last-commit/nyx-dev-officials/Nyx-Baileys?style=flat-square&labelColor=1a1a1a&color=94a3b8)](https://github.com/nyx-dev-officials/Nyx-Baileys/commits/main)

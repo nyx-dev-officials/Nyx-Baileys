@@ -45,11 +45,11 @@ Do not commit either without an explicit instruction.
 cd /c/Nyx-Baileys
 npm run check      # tsc --noEmit, strict
 npm run build      # clean dist, then tsc
-npm test           # node:test, 783 assertions
+npm test           # node:test, 1288 assertions
 node scripts/check-exports.mjs   # 24 export targets
 ```
 
-Current status: **check clean · build clean · 867 pass / 0 fail · 24 exports resolve.**
+Current status: **check clean · build clean · 1288 pass / 0 fail · 27 exports resolve.**
 
 `867` is up from 783: `tests/ops50.test.js` adds 84 assertions over the 92 functions in
 `src/toolkit/ops-50/`. See §12.
