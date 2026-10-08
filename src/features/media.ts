@@ -40,7 +40,23 @@ const gzipAsync = promisify(gzip);
 const gunzipAsync = promisify(gunzip);
 const deflateAsync = promisify(deflate);
 
-/* ───────────────────── codec backends (sharp / ffmpeg) ───────────────── */
+/**
+ * Assert a codec run produced real output.
+ *
+ * ffmpeg can exit 0 and still write nothing useful — an unsupported input, a
+ * zero-length stream. Trusting the exit code alone is how a "compressed" file
+ * ends up being zero bytes while the caller reports a ratio.
+ */
+function requireNonEmpty(outputPath: string, caller: string): void {
+  if (!existsSync(outputPath) || statSync(outputPath).size === 0) {
+    throw new Error(
+      `${caller}: ffmpeg reported success but produced no output at ${outputPath}. `
+      + 'The input may be an unsupported or corrupt container.',
+    );
+  }
+}
+
+/* ──────────────────────── codec backends (sharp / ffmpeg) ────────────── */
 
 /** sharp, typed loosely: only the operations actually used below. */
 type SharpPipeline = ReturnType<typeof sharpLib>;
@@ -426,20 +442,43 @@ export interface CompressVideoOptions {
  * Compress a video file (pure-Node: gzip-compresses the raw bytes as a stand-in
  * for codec transcoding; swap for an ffmpeg child-process at the call site).
  */
+/**
+ * Compress a video with a real codec, via ffmpeg.
+ *
+ * Replaced a gzip stand-in that wrote `.compressed.gz` — not a decodable video,
+ * returned as `CompressionResult` with a plausible ratio. H.264 in an MP4
+ * container is what WhatsApp actually accepts.
+ *
+ * `crf` is the quality knob (0–51, lower is better). It is clamped rather than
+ * trusted: ffmpeg exits non-zero on an out-of-range value, and clamping turns
+ * that into a predictable result instead of a backend error string.
+ */
 export async function compressVideo(
   inputPath: string,
   options: CompressVideoOptions = {},
 ): Promise<CompressionResult> {
-  const { outputPath = `${inputPath}.compressed.gz` } = options;
-  const src = readFileSync(inputPath);
-  const compressed = await gzipAsync(src, { level: 6 });
-  writeFileSync(outputPath, compressed);
-  return {
+  const {
+    crf = 28, preset = 'fast', audioCodec = 'aac', videoCodec = 'libx264',
+  } = options;
+  const quality = Math.max(0, Math.min(51, Math.round(crf)));
+  const outputPath = options.outputPath ?? `${inputPath}.compressed.mp4`;
+  const originalSize = statSync(inputPath).size;
+
+  const ffmpeg = await requireFfmpeg('compressVideo');
+  await runFfmpeg(ffmpeg, [
+    '-hide_banner', '-loglevel', 'error', '-y',
+    '-i', inputPath,
+    '-c:v', videoCodec,
+    '-crf', String(quality),
+    '-preset', preset,
+    '-c:a', audioCodec,
+    '-movflags', '+faststart',   // moov atom first, so WhatsApp can preview
     outputPath,
-    originalSize: src.length,
-    compressedSize: compressed.length,
-    ratio: compressed.length / src.length,
-  };
+  ]);
+
+  requireNonEmpty(outputPath, 'compressVideo');
+  const compressedSize = statSync(outputPath).size;
+  return { outputPath, originalSize, compressedSize, ratio: compressedSize / originalSize };
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
