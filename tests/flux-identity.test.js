@@ -144,9 +144,15 @@ test('stripDanglingMarkers repairs only the unmatched marker', () => {
 
 /* ══ footer ═══════════════════════════════════════════════════════ */
 
-test('the footer is off unless explicitly enabled', () => {
-  assert.equal(footer(), '', 'default off');
-  assert.equal(sign('hello'), 'hello');
+test('the footer is on by default and opts out explicitly', () => {
+  // Default flipped to ON: the operator asked for the copyright on every reply.
+  // The recorded risk (stamping every message is how an account gets
+  // rate-limited) is why `enabled: false` must keep working.
+  assert.match(footer(), /made by Nyx/, 'default on');
+  assert.match(sign('hello'), /made by Nyx/);
+
+  assert.equal(footer({ enabled: false }), '', 'explicit opt-out still works');
+  assert.equal(sign('hello', { enabled: false }), 'hello');
 });
 
 test('an enabled footer is appended, not prepended', () => {
@@ -445,12 +451,13 @@ test('respond repairs dangling formatting and strips ambiguous glyphs', async ()
   assert.ok(!String(sent?.text ?? '').includes('𝐅'), 'and no styled letters');
 });
 
-test('the footer is off by default and applied when enabled', async () => {
-  const off = sock();
-  await createBot().respond(off, DM, msg('flux ping'));
-  assert.ok(!String(off.calls.at(-1)?.[1]?.text ?? '').includes('made by Nyx'));
-
+test('the footer is on by default and can be turned off', async () => {
   const on = sock();
-  await createBot({ footer: { enabled: true } }).respond(on, DM, msg('flux ping'));
-  assert.match(String(on.calls.at(-1)?.[1]?.text ?? ''), /made by Nyx/);
+  await createBot().respond(on, DM, msg('flux ping'));
+  assert.match(String(on.calls.at(-1)?.[1]?.text ?? ''), /made by Nyx/,
+    'every reply carries the copyright unless disabled');
+
+  const off = sock();
+  await createBot({ footer: { enabled: false } }).respond(off, DM, msg('flux ping'));
+  assert.ok(!String(off.calls.at(-1)?.[1]?.text ?? '').includes('made by Nyx'));
 });

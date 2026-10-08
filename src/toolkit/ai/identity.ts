@@ -19,10 +19,14 @@
  *    `externalAdReply`, or a fabricated verified badge is *exactly* what made
  *    `Verified.ts` messages arrive at a clean ID and then never appear. See
  *    `CONTEXT.md` §6.1. Real identity is carried in the visible text instead.
- * 2. **The copyright footer is opt-in, default off.** It appends to every reply,
- *    which is the definition of unsolicited advertising and is how a WhatsApp
- *    account gets rate-limited or banned. The mechanism is here and correct; the
- *    decision is yours.
+ * 2. **The copyright footer is on by default**, per the operator: every reply is
+ *    signed `made by Nyx`. Opt out with `enabled: false`.
+ *
+ *    Recorded risk, unchanged: stamping every message is exactly how a WhatsApp
+ *    account gets rate-limited, and on a group it spams every participant. That is
+ *    the operator's decision to take on their own account, so the default follows
+ *    the instruction rather than overruling it — but it is stated here so nobody
+ *    rediscovers it as a surprise ban.
  */
 
 import type { AnySock } from '../ops-50/types.js';
@@ -251,15 +255,23 @@ export function checkFormatting(text: string): string[] {
    ════════════════════════════════════════════════════════════════════════ */
 
 export interface FooterOptions {
-  /** Append on every reply. Default false — see the note at the top of this file. */
+  /**
+   * Append on every reply. **Default true** — the operator asked for the
+   * copyright on every message, which is what a brand is for.
+   *
+   * This was previously default-off on the grounds that an unsolicited footer is
+   * how an account gets rate-limited. That remains a real risk, but it is the
+   * operator's call to make on their own account, not the library's to make by
+   * default. `enabled: false` opts out.
+   */
   enabled?: boolean;
   /** Override the attribution text. */
   text?: string;
 }
 
-/** The default footer, empty when disabled. */
+/** The default footer. Present on every reply unless explicitly disabled. */
 export function footer(options: FooterOptions = {}): string {
-  if (options.enabled !== true) return '';
+  if (options.enabled === false) return '';
   return options.text ?? `_${MADE_BY}_`;
 }
 
