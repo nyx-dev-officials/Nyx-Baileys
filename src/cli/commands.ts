@@ -19,12 +19,15 @@
  */
 
 import { appendFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { join, resolve as resolvePath } from 'node:path';
 import { createInterface } from 'node:readline/promises';
 
 import { DisconnectReason } from '@whiskeysockets/baileys';
 
 import { createFormFlow, infoRow, radioRow } from '../core/nodes.js';
+import { renderIntro, codeFrame } from './intro.js';
 import { moderation } from '../plugins/moderation.js';
 import { welcome } from '../plugins/welcome.js';
 import { FileSessionStore } from '../core/session-store.js';
@@ -72,7 +75,12 @@ export class CliError extends Error {
 /* ── environment ──────────────────────────────────────────────────── */
 
 export interface CliEnv {
-  readonly sessionDir: string;
+  /**
+   * Session directory. Not readonly because an interactive pairing may switch to
+   * a different one when the current directory already holds another account —
+   * silently pairing a second number over the first would destroy a session.
+   */
+  sessionDir: string;
   readonly logLevel: LogLevel;
   /** True when the user set the level rather than inheriting the default. */
   readonly logLevelExplicit: boolean;
@@ -646,11 +654,112 @@ async function requestPhoneCode(io: Reporter, sock: CoreSocket, digits: string):
   return code;
 }
 
+/**
+ * The introduction shown on a first interactive pairing.
+ *
+ * Written to answer the three questions someone actually has at this moment —
+ * what is about to happen to my account, do I need my phone out, and what do
+ * I do when the code appears — rather than to describe the flags.
+ */
+function printIntroduction(io: Reporter, ctx: CommandContext): void {
+  // Visual only. The layout lives in cli/intro.ts and is returned as text, so
+  // it can be asserted on rather than eyeballed in terminal output.
+  //
+  // The Reporter paints with `c()` and the renderer wants `paint()`, so a thin
+  // adapter is passed rather than widening Reporter to match the renderer.
+  renderIntro({
+    line: (t?: string) => io.line(t),
+    note: (t: string) => io.note(t),
+    paint: (t, code) => io.c(t, code),
+  }, {
+    version: readVersion(),
+    sessionDir: ctx.env.sessionDir,
+    // Seeded from the clock so each run differs, but fixed for the life of the
+    // run so the picture does not shimmer while the socket opens.
+    seed: Date.now() & 0x7fffffff,
+  });
+}
+
+/** Version string from the installed package, or a placeholder. */
+function readVersion(): string {
+  try {
+    return JSON.parse(readFileSync(fileURLToPath(new URL('../../package.json', import.meta.url)), 'utf8')).version as string;
+  } catch {
+    return '0.0.0';
+  }
+}
+
+/** Ask one line, with a dimmed default, on stderr so stdout stays parseable. */
+
+/** Ask one question, with a default, on stderr so stdout stays parseable. */
+async function ask(question: string, fallback: string): Promise<string> {
+  const rl = createInterface({ input: process.stdin, output: process.stderr });
+  try {
+    const answer = await rl.question(`${question}\n  (Enter for ${fallback}): `);
+    return answer.trim();
+  } finally {
+    rl.close();
+  }
+}
+
 async function cmdPair(ctx: CommandContext): Promise<ExitCode> {
   const { args, io } = ctx;
   const pairTimeout = flagNumber(args, 'timeout', 180) * 1000;
   const connectTimeout = flagNumber(args, 'connect-timeout', 60) * 1000;
-  const phone = flagString(args, 'phone', '').trim();
+  let phone = flagString(args, 'phone', '').trim();
+
+  const interactive = process.stdin.isTTY === true && !io.json;
+  const wantsHelp = flagBool(args, 'help-intro', false);
+
+  // Introduction first. A first run that opens with "Session directory:" and a
+  // flag table reads like an internal tool, and the one thing a new operator
+  // needs to know — that this links their personal WhatsApp to a running
+  // process — is buried. `--phone` skips straight past this.
+  if (!phone && !wantsHelp) {
+    // Checked before the number is typed, because the most common failure on a
+    // second run is pointing at a directory that already holds a different
+    // account. Catching it here means the question about the number is never
+    // asked for a pairing that cannot happen.
+    const pre = await readSession(ctx.env.sessionDir);
+    if (pre.registered) {
+      printIntroduction(io, ctx);
+      io.line();
+      io.warn(`${ctx.env.sessionDir} is already paired as ${pre.jid ?? 'another number'}.`);
+      io.line('Each number needs its own session directory, or the second one');
+      io.line('will overwrite the first.');
+      io.line();
+      if (!interactive) {
+        io.line('Pass a different directory, for example:');
+        io.line('  nyx-baileys pair --dir ./session-2');
+        io.emit('pair', { paired: false, reason: 'dir-in-use', interactive: false });
+        return EXIT.usage;
+      }
+      const suggested = `${ctx.env.sessionDir.replace(/[\\/]+$/, '')}-2`;
+      const chosen = await ask('Session directory for the new number', suggested);
+      if (chosen) ctx.env.sessionDir = chosen;
+      io.line();
+      io.line(`Using: ${ctx.env.sessionDir}`);
+    }
+  }
+
+  if (!phone && !wantsHelp) {
+    printIntroduction(io, ctx);
+    if (!interactive) {
+      io.line();
+      io.line('Not a terminal, so there is nothing to prompt on. Pass the number:');
+      io.line('  nyx-baileys pair --phone 628XXXXXXXXX');
+      io.emit('pair', { paired: false, reason: 'no-phone', interactive: false });
+      return EXIT.usage;
+    }
+    const answer = await ask('WhatsApp number (country code, digits only)', ctx.env.sessionDir);
+    phone = answer;
+    if (!phone) {
+      io.line();
+      io.line('Nothing entered, so nothing was changed.');
+      io.emit('pair', { paired: false, reason: 'cancelled', interactive: true });
+      return EXIT.ok;
+    }
+  }
 
   // Checked before the socket opens, not at the point of use: a typo here would
   // otherwise cost a full connect attempt — and WhatsApp counts those.

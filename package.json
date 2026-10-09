@@ -59,7 +59,13 @@
     "bench": "node --expose-gc bench/message-throughput.mjs",
     "bench:plugins": "node --expose-gc bench/plugin-profile.mjs",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
-    "prepublishOnly": "npm run clean && npm run build && node scripts/check-exports.mjs"
+    "prepublishOnly": "npm run clean && npm run build && node scripts/check-exports.mjs",
+    "pair": "node bin/nyx-baileys.js pair",
+    "status": "node bin/nyx-baileys.js status",
+    "send": "node bin/nyx-baileys.js send",
+    "health": "node bin/nyx-baileys.js health",
+    "sessions": "node bin/nyx-baileys.js sessions",
+    "cli": "node bin/nyx-baileys.js"
   },
   "keywords": [
     "whatsapp",
