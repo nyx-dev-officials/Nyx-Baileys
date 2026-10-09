@@ -322,7 +322,7 @@ export const randomFamily: FamilySpec<{ kind: string; gen: () => string; note: s
   title: 'random generator',
   entries: [
     { name: 'roll', summary: 'Roll a dice (d6 by default, dN with an argument)', data: { kind: 'dice', gen: () => String(1 + Math.floor(Math.random() * 6)), note: 'd6 by default; "roll 20" for d20' } },
-    { name: 'coin', summary: 'Flip a coin', data: { kind: 'coin', gen: () => (Math.random() < 0.5 ? 'heads' : 'tails'), note: 'fair coin' } },
+    { name: 'coinflip', summary: 'Flip a coin', data: { kind: 'coin', gen: () => (Math.random() < 0.5 ? 'heads' : 'tails'), note: 'fair coin' } },
     { name: 'pick', summary: 'Pick a random element from a comma-separated list', data: { kind: 'pick', gen: () => '', note: 'usage: pick a, b, c' } },
     { name: 'uid', summary: 'Generate a random hex token', data: { kind: 'uid', gen: () => randomBytes(8).toString('hex'), note: '64-bit hex token' } },
     { name: 'uuid', summary: 'Generate a UUID v4', data: { kind: 'uuid', gen: () => randomBytes(16).toString('hex'), note: '32 hex chars; not a formatted v4 UUID' } },

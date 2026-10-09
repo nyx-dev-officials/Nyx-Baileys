@@ -47,7 +47,7 @@ const deflateAsync = promisify(deflate);
  * zero-length stream. Trusting the exit code alone is how a "compressed" file
  * ends up being zero bytes while the caller reports a ratio.
  */
-function requireNonEmpty(outputPath: string, caller: string): void {
+export function requireNonEmpty(outputPath: string, caller: string): void {
   if (!existsSync(outputPath) || statSync(outputPath).size === 0) {
     throw new Error(
       `${caller}: ffmpeg reported success but produced no output at ${outputPath}. `
@@ -93,7 +93,7 @@ async function requireFfmpeg(caller: string): Promise<string> {
 }
 
 /** Run ffmpeg and reject on a non-zero exit, surfacing its stderr. */
-async function runFfmpeg(bin: string, args: string[]): Promise<void> {
+export async function runFfmpeg(bin: string, args: string[]): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const child = spawn(bin, args, { stdio: ['ignore', 'ignore', 'pipe'] });
     let stderr = '';
@@ -492,21 +492,53 @@ export interface CompressAudioOptions {
   sampleRate?: number;
 }
 
-/** Compress an audio file (gzip stand-in; swap for FFmpeg at the call site). */
+/** The encoder each output container needs. */
+const AUDIO_CODEC: Record<AudioFormat, string> = {
+  mp3: 'libmp3lame',
+  aac: 'aac',
+  m4a: 'aac',
+  ogg: 'libvorbis',
+  opus: 'libopus',
+  wav: 'pcm_s16le',
+  flac: 'flac',
+};
+
+/**
+ * Compress an audio file with a real codec, via ffmpeg.
+ *
+ * Replaced a gzip stand-in that wrote `.compressed.gz` — not audio of any kind,
+ * and it returned a plausible `ratio` for bytes no player can decode. WhatsApp
+ * rejects a gzip blob on upload, so the old function reported success for a file
+ * that could not be sent. The bitrate/sample-rate are clamped rather than
+ * trusted: ffmpeg exits non-zero on an out-of-range value, and clamping turns
+ * that into a predictable result instead of a backend error string.
+ */
 export async function compressAudio(
   inputPath: string,
   options: CompressAudioOptions = {},
 ): Promise<CompressionResult> {
-  const { outputPath = `${inputPath}.compressed.gz` } = options;
-  const src = readFileSync(inputPath);
-  const compressed = await gzipAsync(src, { level: 7 });
-  writeFileSync(outputPath, compressed);
-  return {
+  const format = options.format ?? 'mp3';
+  const codec = AUDIO_CODEC[format];
+  const bitrate = Math.max(8, Math.min(320, Math.round(options.bitrate ?? 128)));
+  const sampleRate = Math.max(8_000, Math.min(48_000, Math.round(options.sampleRate ?? 44_100)));
+  const outputPath = options.outputPath ?? `${inputPath}.compressed.${format}`;
+  const originalSize = statSync(inputPath).size;
+
+  const ffmpeg = await requireFfmpeg('compressAudio');
+  await runFfmpeg(ffmpeg, [
+    '-hide_banner', '-loglevel', 'error', '-y',
+    '-i', inputPath,
+    '-vn',                                   // drop cover art / any video stream
+    '-c:a', codec,
+    // Lossless containers do not take a bitrate.
+    ...(format === 'wav' || format === 'flac' ? [] : ['-b:a', `${bitrate}k`]),
+    '-ar', String(sampleRate),
     outputPath,
-    originalSize: src.length,
-    compressedSize: compressed.length,
-    ratio: compressed.length / src.length,
-  };
+  ]);
+
+  requireNonEmpty(outputPath, 'compressAudio');
+  const compressedSize = statSync(outputPath).size;
+  return { outputPath, originalSize, compressedSize, ratio: compressedSize / originalSize };
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1587,40 +1619,77 @@ export interface OptimizeWAResult {
   whatsappReady: boolean;
 }
 
+/** The ceilings WhatsApp actually enforces, per media type. */
+const WA_LIMITS: Record<OptimizeWAOptions['mediaType'], {
+  maxBytes: number; maxEdge: number; mime: string; ext: string;
+}> = {
+  image: { maxBytes: 5 * 1024 * 1024, maxEdge: 4096, mime: 'image/jpeg', ext: 'jpg' },
+  sticker: { maxBytes: 500 * 1024, maxEdge: 512, mime: 'image/webp', ext: 'webp' },
+  video: { maxBytes: 16 * 1024 * 1024, maxEdge: 1920, mime: 'video/mp4', ext: 'mp4' },
+  audio: { maxBytes: 16 * 1024 * 1024, maxEdge: 0, mime: 'audio/mp4', ext: 'm4a' },
+};
+
 /**
- * Optimise a media file to meet WhatsApp upload constraints:
- *   - Images  → JPEG ≤ 5 MB, max 4096×4096
- *   - Videos  → MP4 H.264 ≤ 16 MB
- *   - Audio   → AAC/OGG ≤ 16 MB
- *   - Stickers → WebP ≤ 500 KB, 512×512
+ * Optimise a media file to meet WhatsApp's real upload constraints:
+ *   - Images   → JPEG, ≤ 5 MB, max edge 4096
+ *   - Videos   → MP4 H.264, ≤ 16 MB
+ *   - Audio    → AAC in M4A, ≤ 16 MB
+ *   - Stickers → WebP, ≤ 500 KB, 512×512
  *
- * Pure-Node implementation gzip-compresses and annotates the result.
+ * Replaced a gzip stand-in that compressed the bytes, **kept the original
+ * extension**, and returned `whatsappReady: true` with `mimeType: 'video/mp4'`
+ * for a file that was not a video at all — a file guaranteed to be rejected,
+ * certified ready. It now transcodes with the same backends `compressImage` and
+ * `compressVideo` use, derives the output extension from the format actually
+ * produced, and **computes** `whatsappReady` from the real output size.
  */
 export async function optimizeForWhatsApp(
   inputPath: string,
   options: OptimizeWAOptions,
 ): Promise<OptimizeWAResult> {
-  const src = readFileSync(inputPath);
-  const originalSize = src.length;
+  const limit = WA_LIMITS[options.mediaType];
+  const originalSize = statSync(inputPath).size;
+  const outputPath = options.outputPath ?? `${inputPath}.wa.${limit.ext}`;
 
-  const mimeMap: Record<OptimizeWAOptions['mediaType'], string> = {
-    image: 'image/jpeg',
-    video: 'video/mp4',
-    audio: 'audio/aac',
-    sticker: 'image/webp',
-  };
+  if (options.mediaType === 'image' || options.mediaType === 'sticker') {
+    const img = sharpInstance(inputPath).resize({
+      width: limit.maxEdge,
+      height: limit.maxEdge,
+      fit: 'inside',
+      withoutEnlargement: true,
+    });
+    if (options.mediaType === 'sticker') await img.webp({ quality: 80 }).toFile(outputPath);
+    else await img.jpeg({ quality: 82 }).toFile(outputPath);
+  } else if (options.mediaType === 'video') {
+    const ffmpeg = await requireFfmpeg('optimizeForWhatsApp');
+    await runFfmpeg(ffmpeg, [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-i', inputPath,
+      '-c:v', 'libx264', '-crf', '28', '-preset', 'fast',
+      '-vf', `scale='min(${limit.maxEdge},iw)':-2`,
+      '-c:a', 'aac',
+      '-movflags', '+faststart',   // moov atom first, so WhatsApp can preview
+      outputPath,
+    ]);
+  } else {
+    const ffmpeg = await requireFfmpeg('optimizeForWhatsApp');
+    await runFfmpeg(ffmpeg, [
+      '-hide_banner', '-loglevel', 'error', '-y',
+      '-i', inputPath, '-vn', '-c:a', 'aac', '-b:a', '128k',
+      outputPath,
+    ]);
+  }
 
-  const outputPath =
-    options.outputPath ?? `${inputPath}.wa-optimized${extname(inputPath)}`;
-  const compressed = await gzipAsync(src, { level: 9 });
-  writeFileSync(outputPath, compressed);
+  requireNonEmpty(outputPath, 'optimizeForWhatsApp');
+  const optimizedSize = statSync(outputPath).size;
 
   return {
     outputPath,
     originalSize,
-    optimizedSize: compressed.length,
-    mimeType: mimeMap[options.mediaType],
-    whatsappReady: true,
+    optimizedSize,
+    mimeType: limit.mime,
+    // Computed from a real byte check against the real ceiling — never asserted.
+    whatsappReady: optimizedSize <= limit.maxBytes,
   };
 }
 

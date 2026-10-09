@@ -215,6 +215,18 @@ export class CommandRegistry {
       // The field that distinguishes a real command from a plausible-looking one.
       throw new FamilyError(`command "${cmd.name}" has no effect — declare what it does`);
     }
+    // A silent overwrite here is how a new command quietly replaces an older
+    // one: the Map ends up unique, so any later "are there duplicate names?"
+    // check passes vacuously, and the only symptom is that the old command's
+    // behaviour vanished. Rejecting at registration makes the collision loud
+    // and immediate, while the owner is still looking at the code they wrote.
+    const existing = this.#commands.get(cmd.name);
+    if (existing) {
+      throw new FamilyError(
+        `command "${cmd.name}" is already registered `
+        + `(family "${existing.family ?? 'none'}"). Rename one of them.`,
+      );
+    }
     this.#commands.set(cmd.name, cmd);
     return this;
   }

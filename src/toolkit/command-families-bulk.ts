@@ -26,6 +26,9 @@ import { countryFamily, mathFnFamily, hashFamily, httpFamily, randomFamily } fro
 import { API_ENDPOINTS, callApi } from './command-api.js';
 import { installUtilityFamilies } from './command-utils.js';
 import { installAestheticCommands } from './command-aesthetic.js';
+import { installExtraAesthetics } from './command-aes2.js';
+import { installFinalAesthetics } from './command-aes3.js';
+import { installSocialGames } from './command-games2.js';
 import { installGameCommands } from './command-games.js';
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -347,6 +350,9 @@ export function installBulkFamilies(reg: CommandRegistry): void {
   reg.family(randomFamily);
   installUtilityFamilies(reg as never);
   installAestheticCommands(reg as never);
+  installExtraAesthetics(reg as never);
+  installFinalAesthetics(reg as never);
+  installSocialGames(reg as never);
   installGameCommands(reg as never);
 
   // One command per verified endpoint. Each genuinely performs a live call, so
