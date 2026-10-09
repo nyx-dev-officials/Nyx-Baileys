@@ -74,7 +74,7 @@ function sharpInstance(input: string | Buffer, opts?: Record<string, unknown>): 
  * point at a specific binary, which is what a packaged deployment should do
  * rather than relying on PATH.
  */
-async function requireFfmpeg(caller: string): Promise<string> {
+export async function requireFfmpeg(caller: string): Promise<string> {
   const explicit = process.env.FFMPEG_PATH;
   if (explicit && existsSync(explicit)) return explicit;
 
