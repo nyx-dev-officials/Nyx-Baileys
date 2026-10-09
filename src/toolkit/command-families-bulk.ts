@@ -23,6 +23,7 @@
 
 import type { CommandRegistry, FamilySpec, CommandContext, CommandResult } from './command-registry.js';
 import { countryFamily, mathFnFamily, hashFamily, httpFamily, randomFamily } from './command-families-extra.js';
+import { API_ENDPOINTS, callApi } from './command-api.js';
 
 /* ════════════════════════════════════════════════════════════════════════
    1. Currency — ISO 4217 with symbol and reference rate
@@ -341,4 +342,17 @@ export function installBulkFamilies(reg: CommandRegistry): void {
   reg.family(hashFamily);
   reg.family(httpFamily);
   reg.family(randomFamily);
+
+  // One command per verified endpoint. Each genuinely performs a live call, so
+  // the count here is bounded by what actually answered when probed — not by a
+  // number someone wanted.
+  for (const ep of API_ENDPOINTS) {
+    reg.command({
+      name: `api-${ep.name}`,
+      summary: ep.summary,
+      effect: `live HTTP GET to ${ep.label}, formatted with a response template`,
+      family: 'live-api',
+      handler: async (ctx) => callApi(ep, ctx.args),
+    });
+  }
 }
