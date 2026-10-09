@@ -32,6 +32,8 @@ import { installSocialGames } from './command-games2.js';
 import { installMediaCommands } from './command-media.js';
 import { installAssistCommands } from './command-assist.js';
 import { installOpsCommands } from './command-ops.js';
+import { installSecurityCommands } from './command-security.js';
+import { installOps2Commands } from './command-ops2.js';
 import { installGameCommands } from './command-games.js';
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -359,6 +361,8 @@ export function installBulkFamilies(reg: CommandRegistry): void {
   installMediaCommands(reg as never);
   installAssistCommands(reg as never);
   installOpsCommands(reg as never);
+  installSecurityCommands(reg as never);
+  installOps2Commands(reg as never);
   installGameCommands(reg as never);
 
   // One command per verified endpoint. Each genuinely performs a live call, so
