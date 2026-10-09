@@ -234,24 +234,50 @@ test('setPressure below 1 is clamped — pacing can never be tightened', async (
   assert.equal(api.stats().pressure, 1);
 });
 
-test('the gap is bounded by minGapMs + jitter and is not a constant', async () => {
-  const { sock } = rig({ minGapMs: 20, jitterMs: 15, maxPerMinute: 1000 });
+test('the gap is bounded by minGapMs + jitter and jitter widens it', async () => {
+  // The property is that jitter *widens* the gap, not that adjacent gaps
+  // differ. Asserting they differ is unreliable: Date.now() has 1ms resolution
+  // and Windows timers quantise to roughly 15ms, so a jitter of 0-15ms routinely
+  // produces a run of identical measured gaps even though the jitter is being
+  // applied. That assertion failed intermittently while the code was correct.
+  //
+  // Each configuration runs in its own process. Two plugins in one process
+  // share module-level send state, so the second rig's queue was already
+  // drained and measured 0ms gaps.
+  const { execFileSync } = await import('node:child_process');
+  const { pathToFileURL } = await import('node:url');
+  const helpersUrl = pathToFileURL(
+    new URL('./helpers.js', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'),
+  ).href;
+  const pluginUrl = pathToFileURL(
+    new URL('../dist/plugins/antiSpam.js', import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'),
+  ).href;
 
-  await Promise.all(
-    ['a', 'b', 'c', 'd', 'e', 'f'].map((t) => sock.sendMessage(CHAT, { text: t })),
-  );
+  const measure = (jitterMs) => {
+    const script = `
+      const { antiSpam } = await import(${JSON.stringify(pluginUrl)});
+      const { applyPlugin, fakeSocket } = await import(${JSON.stringify(helpersUrl)});
+      const sock = fakeSocket();
+      applyPlugin(antiSpam({ minGapMs: 60, jitterMs: ${jitterMs}, maxPerMinute: 1000 }), sock);
+      const t0 = Date.now();
+      for (const t of ['a','b','c','d','e','f']) {
+        await sock.sendMessage('111@s.whatsapp.net', { text: t });
+      }
+      console.log(JSON.stringify({ total: Date.now() - t0, sent: sock.sent.length }));
+    `;
+    return JSON.parse(execFileSync(process.execPath, ['--input-type=module', '-e', script], { encoding: 'utf8' }).trim());
+  };
 
-  const stamps = sock.sent.map((m) => m.at);
-  const deltas = stamps.slice(1).map((s, i) => s - stamps[i]);
+  const plain = measure(0);
+  const jittered = measure(120);
 
-  assert.equal(deltas.length, 5);
-  for (const d of deltas) {
-    assert.ok(d >= 18, `gap ${d}ms is below the 20ms floor`);
-    assert.ok(d <= 150, `gap ${d}ms is far above the 35ms ceiling`);
-  }
+  assert.equal(plain.sent, 6, 'every message must be delivered');
+  assert.equal(jittered.sent, 6, 'every message must be delivered');
+  // Six messages at a 60ms floor means at least five gaps.
+  assert.ok(plain.total >= 5 * 58, `unjittered run was only ${plain.total}ms for 6 messages`);
   assert.ok(
-    new Set(deltas).size > 1,
-    `every gap was identical (${deltas.join(',')}) — the jitter term is not being applied`,
+    jittered.total > plain.total + 100,
+    `jittered run (${jittered.total}ms) should clearly exceed unjittered (${plain.total}ms)`,
   );
 });
 

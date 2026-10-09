@@ -30,6 +30,7 @@ import { installExtraAesthetics } from './command-aes2.js';
 import { installFinalAesthetics } from './command-aes3.js';
 import { installSocialGames } from './command-games2.js';
 import { installMediaCommands } from './command-media.js';
+import { installAssistCommands } from './command-assist.js';
 import { installGameCommands } from './command-games.js';
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -355,6 +356,7 @@ export function installBulkFamilies(reg: CommandRegistry): void {
   installFinalAesthetics(reg as never);
   installSocialGames(reg as never);
   installMediaCommands(reg as never);
+  installAssistCommands(reg as never);
   installGameCommands(reg as never);
 
   // One command per verified endpoint. Each genuinely performs a live call, so

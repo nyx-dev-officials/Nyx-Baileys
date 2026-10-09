@@ -1470,7 +1470,7 @@ export function installMediaCommands(reg: {
     effect: 'list every registered media command grouped by what it does',
     family: 'media',
     handler: async (ctx: CommandContext): Promise<CommandResult> => {
-      const registry = (ctx as unknown as { __registry?: { list(f: { family: string }): Array<{ name: string; summary: string }> } }).__registry;
+      const registry = ctx.registry;
       const all = registry?.list({ family: 'media' }) ?? mediaCommands;
       const groups: Record<string, string[]> = {
         Audio: [], Video: [], Image: [], Analysis: [], Other: [],

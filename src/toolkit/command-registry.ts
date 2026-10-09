@@ -57,6 +57,15 @@ export interface CommandContext {
   state: Map<string, unknown>;
   /** True when the sender is the configured owner. */
   isOwner: boolean;
+  /**
+   * The registry running this command.
+   *
+   * Present so that help-style commands can enumerate what is actually
+   * registered rather than carrying a hand-written list. A static list goes
+   * stale silently — commands get added and never appear, and help still
+   * renders happily. There is a test asserting the two agree.
+   */
+  registry?: { list(filter?: { family?: string; prefix?: string }): Command[] };
 }
 
 export interface Command {
@@ -291,6 +300,7 @@ export class CommandRegistry {
       sender: extra.sender ?? jid,
       state: extra.state ?? this.#state,
       isOwner: extra.isOwner ?? false,
+      registry: this,
     };
 
     try {
