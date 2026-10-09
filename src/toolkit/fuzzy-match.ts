@@ -187,10 +187,11 @@ const MESSAGES: Record<MessageLocale, {
     fuzzyFooter: 'Percent is how close the words are, not a confidence score. Re-run with the exact name.',
   },
   id: {
-    noClose: (token, count) => `Perintah \`${token}\` nggak ada, dan yang mirip juga nggak ada.\n`
-      + `Flux punya ${count} perintah — coba \`menu\` atau \`help\` buat lihat semuanya.`,
-    fuzzyHead: (token) => `Ga ada perintah \`${token}\`. Yang paling mirip:`,
-    fuzzyFooter: 'Angkanya seberapa mirip teksnya, bukan tingkat keyakinan. Panggil ulang pakai nama yang persis.',
+    noClose: (token, count) => `Perintah \`${token}\` tidak ditemukan, dan tidak ada perintah yang mirip.\n`
+      + `Flux memiliki ${count} perintah. Ketik \`menu\` atau \`help\` untuk melihat semuanya.`,
+    fuzzyHead: (token) => `Tidak ada perintah \`${token}\`. Perintah yang paling mirip:`,
+    fuzzyFooter: 'Persentase menunjukkan seberapa mirip teksnya, bukan tingkat keyakinan. '
+      + 'Silakan gunakan nama yang tepat.',
   },
 };
 
