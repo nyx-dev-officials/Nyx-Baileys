@@ -25,6 +25,8 @@ import type { CommandRegistry, FamilySpec, CommandContext, CommandResult } from 
 import { countryFamily, mathFnFamily, hashFamily, httpFamily, randomFamily } from './command-families-extra.js';
 import { API_ENDPOINTS, callApi } from './command-api.js';
 import { installUtilityFamilies } from './command-utils.js';
+import { installAestheticCommands } from './command-aesthetic.js';
+import { installGameCommands } from './command-games.js';
 
 /* ════════════════════════════════════════════════════════════════════════
    1. Currency — ISO 4217 with symbol and reference rate
@@ -344,6 +346,8 @@ export function installBulkFamilies(reg: CommandRegistry): void {
   reg.family(httpFamily);
   reg.family(randomFamily);
   installUtilityFamilies(reg as never);
+  installAestheticCommands(reg as never);
+  installGameCommands(reg as never);
 
   // One command per verified endpoint. Each genuinely performs a live call, so
   // the count here is bounded by what actually answered when probed — not by a
