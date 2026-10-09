@@ -152,6 +152,60 @@ export const unitFamilies: FamilySpec<UnitEntryData>[] = Object.entries(UNITS).m
 }));
 
 
+/**
+ * The natural-language form: `flux convert 5 kg to lb`.
+ *
+ * ## Why this exists alongside the `to-<unit>` family
+ *
+ * The generated commands are named `to-lb`, `to-kg`, `to-yd`. Those are good
+ * names for a menu — you can list them and they sort — but nobody types
+ * "to-lb". People type "convert", so without this command the entire unit
+ * surface is unreachable by the query a human would actually write, and a typo
+ * like `convertt` matches nothing at all.
+ *
+ * So this is one command that dispatches over the same unit tables, rather than
+ * 93 aliases nobody would guess either.
+ */
+const convertFamily: FamilySpec<null> = {
+  id: 'convert',
+  title: 'unit conversion, natural form',
+  entries: [
+    { name: 'convert', summary: 'Convert a value between units, e.g. convert 5 kg to lb', data: null },
+  ],
+  build: async (_entry, ctx) => {
+    const m = /^\s*(-?[\d.,]+)\s*([a-zA-Z]+)\s+(?:to|in|as|into|>)\s+([a-zA-Z]+)\s*$/i
+      .exec(ctx.args);
+    if (!m) {
+      const kinds = [...new Set(Object.values(UNITS).map((u) => u.kind))].join(', ');
+      return { text: `Usage: convert <value> <from> to <to>\nExamples:\n  convert 5 kg to lb\n  convert 100 C to F\n  convert 2.5 m to ft\nKinds: ${kinds}` };
+    }
+    const rawValue = (m[1] ?? '').replace(/,/g, '');
+    const rawFrom = m[2] ?? '';
+    const rawTo = m[3] ?? '';
+    const value = Number.parseFloat(rawValue);
+    if (!Number.isFinite(value)) return { error: `"${rawValue}" is not a number` };
+
+    for (const def of Object.values(UNITS)) {
+      const from = def.aliases[rawFrom.toLowerCase()] ?? rawFrom;
+      const to = def.aliases[rawTo.toLowerCase()] ?? rawTo;
+      if (def.members[from] === undefined || def.members[to] === undefined) continue;
+
+      const offsets = def.offsets ?? {};
+      const inBase = value * def.members[from]! + (offsets[from] ?? 0);
+      const out = (inBase - (offsets[to] ?? 0)) / def.members[to]!;
+      const shown = Math.abs(out) >= 1e6 || (Math.abs(out) < 1e-4 && out !== 0)
+        ? out.toExponential(6)
+        : Number.parseFloat(out.toPrecision(10)).toString();
+      return { text: `${rawValue} ${rawFrom} = ${shown} ${rawTo}` };
+    }
+
+    return {
+      error: `Don't know how to convert "${rawFrom}" to "${rawTo}". `
+        + `Both must be from the same kind, e.g. kg/lb or C/F — not kg/C.`,
+    };
+  },
+};
+
 /* ── maths: an expression evaluator, not a pattern table ──────────────── */
 
 const MATH_CONSTS: Record<string, number> = {
@@ -286,6 +340,7 @@ export const mathFamily: FamilySpec<null> = {
 
 export function installCoreFamilies(reg: CommandRegistry): CommandRegistry {
   for (const f of unitFamilies) reg.family(f);
+  reg.family(convertFamily);
   reg.family(mathFamily);
   reg.alias('math', 'calc');
   return reg;

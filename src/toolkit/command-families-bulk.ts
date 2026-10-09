@@ -22,6 +22,7 @@
  */
 
 import type { CommandRegistry, FamilySpec, CommandContext, CommandResult } from './command-registry.js';
+import { countryFamily, mathFnFamily, hashFamily, httpFamily, randomFamily } from './command-families-extra.js';
 
 /* ════════════════════════════════════════════════════════════════════════
    1. Currency — ISO 4217 with symbol and reference rate
@@ -335,4 +336,9 @@ export function installBulkFamilies(reg: CommandRegistry): void {
   reg.family(currencyFamily);
   reg.family(colorFamily);
   reg.family(timezoneFamily);
+  reg.family(countryFamily);
+  reg.family(mathFnFamily);
+  reg.family(hashFamily);
+  reg.family(httpFamily);
+  reg.family(randomFamily);
 }
