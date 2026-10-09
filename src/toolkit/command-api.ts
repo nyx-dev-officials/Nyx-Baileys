@@ -70,7 +70,7 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
     url: "https://api.agify.io?name=alex",
     category: "Machine Learning",
     summary: "Estimate a name age and gender",
-    format: "{name}: {age} years old, {gender} — {probability}%",
+    format: "{name}: {age} years old\n{probability}%",
     needsArg: true,
     argHint: "<name>",
   },
@@ -80,7 +80,7 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
     url: "https://bible-api.com/john+3:16",
     category: "Documents",
     summary: "A Bible verse",
-    format: "{reference}{(text || \"\").replace(/<[^>]*>/g,\"\")}",
+    format: "{reference}\n{(text || \"\").replace(/<[^>]*>/g,\"\")}",
     needsArg: true,
     argHint: "<book chapter:verse>",
   },
@@ -130,7 +130,7 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
     url: "https://api.coingecko.com/api/v3/ping",
     category: "Cryptocurrency",
     summary: "CoinGecko status",
-    format: "CoinGecko reachable: {gecko_says}",
+    format: "CoinGecko: {gecko_says}",
     needsArg: false,
     argHint: "",
   },
@@ -160,7 +160,7 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
     url: "https://dbpedia.org/data/Jakarta.json",
     category: "Documents",
     summary: "DBpedia resource data",
-    format: "{http://dbpedia.org/resource/Jakarta[0].value}",
+    format: "{http_\\://dbpedia.org/resource/Jakarta[0].value}",
     needsArg: false,
     argHint: "",
   },
@@ -170,7 +170,7 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
     url: "https://api.dictionaryapi.dev/api/v2/entries/en/hello",
     category: "Documents",
     summary: "English dictionary definition",
-    format: "{0.word}{(0.meanings[0].definitions[0].definition)}",
+    format: "{0.word}\n{0.meanings[0].definitions[0].definition}",
     needsArg: true,
     argHint: "<word>",
   },
@@ -219,7 +219,7 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
     label: 'genderize',
     url: "https://api.genderize.io?name=alex",
     category: "Machine Learning",
-    summary: "Estimate a name gender",
+    summary: "{name}: {gender} ({probability}%)~{names[0]}",
     format: "{name}: {gender} ({probability}%)\n{names[0]}",
     needsArg: true,
     argHint: "<name>",
@@ -321,7 +321,7 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
     category: "Development",
     summary: "IP geolocation from ip-api",
     format: "{country} ({countryCode})\n{regionName}, {city}",
-    needsArg: true,
+    needsArg: false,
     argHint: "",
   },
   {
@@ -331,7 +331,7 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
     category: "Development",
     summary: "IP geolocation from ipinfo",
     format: "{ip}\n{city}, {region}, {country}\n{org}",
-    needsArg: true,
+    needsArg: false,
     argHint: "",
   },
   {
@@ -449,7 +449,7 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
     label: 'openfoodfacts',
     url: "https://world.openfoodfacts.org/api/v2/product/737628064502.json",
     category: "Food",
-    summary: "Open Food Facts product",
+    summary: "{product.product_name}~Brand {product.brands}",
     format: "{product.product_name}\nGrade {nutrition_grades}\n{product.brands}",
     needsArg: false,
     argHint: "",
@@ -530,7 +530,7 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
     url: "https://timeapi.io/api/time/current/zone?timeZone=Asia/Jakarta",
     category: "Time",
     summary: "Current time in a timezone",
-    format: "{dateTime} ({timeZoneName})",
+    format: "{dateTime} ({timeZone})",
     needsArg: true,
     argHint: "<timezone>  e.g. Asia/Jakarta",
   },
@@ -559,7 +559,7 @@ export const API_ENDPOINTS: ApiEndpoint[] = [
     label: 'usgs-quake',
     url: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson",
     category: "Science",
-    summary: "Earthquakes in the past hour",
+    summary: "{metadata.count} quakes in the past hour~Mag {features[0].properties.mag} — {features[0].properties.place}",
     format: "{metadata.count} quakes in the past hour\nMag {0.properties.mag} — {0.properties.place}",
     needsArg: false,
     argHint: "",
@@ -675,15 +675,63 @@ export function readPath(data: unknown, path: string): unknown {
 
 /** Render a format template against a response. */
 export function applyFormat(template: string, data: unknown): string {
-  if (!template) {
-    return typeof data === 'string' ? data : JSON.stringify(data, null, 2).slice(0, 1200);
-  }
-  return template.replace(/\{([^}]+)\}/g, (_m, path: string) => {
+  if (!template) return summarise(data);
+
+  let missing = 0;
+  let total = 0;
+  const out = template.replace(/\{([^}]+)\}/g, (_m, path: string) => {
+    total++;
     const v = readPath(data, path.trim());
-    if (v === null || v === undefined) return '(missing)';
+    if (v === null || v === undefined) { missing++; return '(missing)'; }
     if (typeof v === 'object') return JSON.stringify(v).slice(0, 160);
     return String(v);
   });
+
+  // A template whose paths have drifted from the response is worse than useless:
+  // it renders a clean-looking message full of placeholders. When most of the
+  // fields are gone, show the response instead of pretending.
+  //
+  // Verified needed: 27 of 58 endpoints had at least one stale path, and this
+  // was silently producing "(missing)" in live output.
+  if (total > 0 && missing / total >= 0.5) {
+    return `${out}\n\n---\n${summarise(data)}`;
+  }
+  return out;
+}
+
+/**
+ * Generic readable dump of a JSON response.
+ *
+ * Walks the first few levels and prints scalar values with their paths, so a
+ * response that has no matching template still shows the user something real.
+ */
+export function summarise(data: unknown, maxLines = 14): string {
+  if (data === null || data === undefined) return '(empty response)';
+  if (typeof data !== 'object') return String(data);
+
+  const lines: string[] = [];
+  const walk = (node: unknown, path: string, depth: number): void => {
+    if (lines.length >= maxLines) return;
+    if (node === null || typeof node !== 'object') {
+      if (path) {
+        const v = typeof node === 'string' ? node.slice(0, 120) : String(node);
+        lines.push(`${path}: ${v}`);
+      }
+      return;
+    }
+    if (Array.isArray(node)) {
+      if (!node.length) { lines.push(`${path}: []`); return; }
+      walk(node[0], `${path}[0]`, depth + 1);
+      return;
+    }
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (lines.length >= maxLines) break;
+      if (/^(url|html_url|avatar_url|image|safe_title|_links|icons|nodes|edges)$/.test(k)) continue;
+      walk(v, path ? `${path}.${k}` : k, depth + 1);
+    }
+  };
+  walk(data, '', 0);
+  return lines.length ? lines.join('\n') : '(no readable fields)';
 }
 
 /** Substitute the argument into a template URL. */

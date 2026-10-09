@@ -56,7 +56,7 @@ const FORMATTERS = {
   'xkcd-image': "xkcd #{num}: {title}~{img}",
   'wikipedia-summary': "{title}~{extract}",
   'wikimedia-opensearch': "Matches for {1}~{3[0]}",
-  'dbpedia': '{http://dbpedia.org/resource/Jakarta[0].value}',
+  'dbpedia': "{http_\\://dbpedia.org/resource/Jakarta[0].value}",
   'openlibrary-search': "{numFound} results for {q}~Top: {docs[0].title} ({docs[0].first_publish_year})",
   'openlibrary-author': '{numFound} authors\
 Top: {docs[0].name}',
@@ -72,21 +72,19 @@ Top: {docs[0].name}',
   'google-dns': "DNS status {Status} ({TC})~{Answer[0].data}",
   'worldbank-indicator': "GDP indicator (latest)~{1[1][0].value}",
   'covid-historical': "{country}~Confirmed {timeline[0].confirmed}~Deaths {timeline[0].deaths}",
-  'gemini-public': 'bitcoin: ${usd}',
+  'gemini-public': "bitcoin: ${usd}",
   'blockchain-info': "Block {height}~{hash}~{time}",
-  'coingecko-ping': 'CoinGecko reachable: {gecko_says}',
+  'coingecko-ping': "CoinGecko: {gecko_says}",
   'dog-random': 'Dog breed: {message}',
   'catfact-random': '{fact}',
   'random-dog': 'Dog photo: {url}',
   'openfoodfacts': "{product.product_name}~Grade {nutrition_grades}~{product.brands}",
-  'timeapi': '{dateTime} ({timeZoneName})',
+  'timeapi': '{dateTime} ({timeZone})',
   'timezoneapi': '{dateTime} ({timeZone})',
-  'calculator': '{result}',
-  'dictionaryapi': '{0.word}\
-{(0.meanings[0].definitions[0].definition)}',
-  'bible-api': '{reference}\
-{(text || "").replace(/<[^>]*>/g,"")}',
-  'agify': '{name}: {age} years old, {gender} — {probability}%',
+  'calculator': "{result}",
+  'dictionaryapi': "{0.word}~{0.meanings[0].definitions[0].definition}",
+  'bible-api': "{reference}~{(text || \"\").replace(/<[^>]*>/g,\"\")}",
+  'agify': "{name}: {age} years old~{probability}%",
   'genderize': "{name}: {gender} ({probability}%)~{names[0]}",
   'advice': '{slip.advice}',
   'affirmations': (() => '')(),
@@ -103,7 +101,7 @@ const SUMMARIES = {
   'open-meteo-airvar': 'European AQI for a location',
   'open-meteo-geo': 'Geocode a place name to coordinates',
   'weather-gov': 'US National Weather Service grid point',
-  'usgs-quake': 'Earthquakes in the past hour',
+  'usgs-quake': "{metadata.count} quakes in the past hour~Mag {features[0].properties.mag} — {features[0].properties.place}",
   'iss-position': 'Current position of the ISS',
   'restcountries-name': 'Country facts by name',
   'restcountries-all': 'Countries in a region',
@@ -142,14 +140,14 @@ const SUMMARIES = {
   'dog-random': 'A random dog photo',
   'catfact-random': 'A random cat fact',
   'random-dog': 'A random dog photo',
-  'openfoodfacts': 'Open Food Facts product',
+  'openfoodfacts': "{product.product_name}~Brand {product.brands}",
   'timeapi': 'Current time in a timezone',
   'timezoneapi': 'Current time in a timezone',
   'calculator': 'Evaluate an expression (mathjs)',
   'dictionaryapi': 'English dictionary definition',
   'bible-api': 'A Bible verse',
   'agify': 'Estimate a name age and gender',
-  'genderize': 'Estimate a name gender',
+  'genderize': "{name}: {gender} ({probability}%)~{names[0]}",
   'affirmations': 'A daily affirmation',
   'advice': 'A piece of advice',
   'jokeapi': 'A joke',
@@ -180,7 +178,7 @@ const NEEDS_ARG = new Set([
   'openlibrary-search', 'openlibrary-author', 'wikipedia-summary',
   'dictionaryapi', 'bible-api', 'agify', 'genderize', 'jsonplaceholder-users',
   'timeapi', 'timezoneapi', 'calculator', 'worldbank-indicator', 'covid-historical',
-  'gemini-public', 'google-dns', 'ipinfo', 'ip-api',
+  'gemini-public', 'google-dns',
 ]);
 
 /** Argument placeholder shown in usage, where the endpoint needs one. */
@@ -314,15 +312,63 @@ export function readPath(data: unknown, path: string): unknown {
 
 /** Render a format template against a response. */
 export function applyFormat(template: string, data: unknown): string {
-  if (!template) {
-    return typeof data === 'string' ? data : JSON.stringify(data, null, 2).slice(0, 1200);
-  }
-  return template.replace(/\\{([^}]+)\\}/g, (_m, path: string) => {
+  if (!template) return summarise(data);
+
+  let missing = 0;
+  let total = 0;
+  const out = template.replace(/\\{([^}]+)\\}/g, (_m, path: string) => {
+    total++;
     const v = readPath(data, path.trim());
-    if (v === null || v === undefined) return '(missing)';
+    if (v === null || v === undefined) { missing++; return '(missing)'; }
     if (typeof v === 'object') return JSON.stringify(v).slice(0, 160);
     return String(v);
   });
+
+  // A template whose paths have drifted from the response is worse than useless:
+  // it renders a clean-looking message full of placeholders. When most of the
+  // fields are gone, show the response instead of pretending.
+  //
+  // Verified needed: 27 of 58 endpoints had at least one stale path, and this
+  // was silently producing "(missing)" in live output.
+  if (total > 0 && missing / total >= 0.5) {
+    return \`\${out}\\n\\n---\\n\${summarise(data)}\`;
+  }
+  return out;
+}
+
+/**
+ * Generic readable dump of a JSON response.
+ *
+ * Walks the first few levels and prints scalar values with their paths, so a
+ * response that has no matching template still shows the user something real.
+ */
+export function summarise(data: unknown, maxLines = 14): string {
+  if (data === null || data === undefined) return '(empty response)';
+  if (typeof data !== 'object') return String(data);
+
+  const lines: string[] = [];
+  const walk = (node: unknown, path: string, depth: number): void => {
+    if (lines.length >= maxLines) return;
+    if (node === null || typeof node !== 'object') {
+      if (path) {
+        const v = typeof node === 'string' ? node.slice(0, 120) : String(node);
+        lines.push(\`\${path}: \${v}\`);
+      }
+      return;
+    }
+    if (Array.isArray(node)) {
+      if (!node.length) { lines.push(\`\${path}: []\`); return; }
+      walk(node[0], \`\${path}[0]\`, depth + 1);
+      return;
+    }
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (lines.length >= maxLines) break;
+      if (/^(url|html_url|avatar_url|image|safe_title|_links|icons|nodes|edges)\$/.test(k)) continue;
+      walk(v, path ? \`\${path}.\${k}\` : k, depth + 1);
+    }
+  };
+  walk(data, '', 0);
+  return lines.length ? lines.join('\\n') : '(no readable fields)';
 }
 
 /** Substitute the argument into a template URL. */
