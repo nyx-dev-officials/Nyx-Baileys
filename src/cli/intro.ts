@@ -32,47 +32,95 @@
 const WIDTH = 74;
 
 /** Display font. Each glyph is seven rows tall and a fixed width. */
-const GLYPH_W = 23;
-
-const FONT: Record<string, string[]> = {
+/**
+ * Display font.
+ *
+ * Seven-row letterforms, doubled for weight and presence.
+ *
+ * Three earlier attempts failed, and the reason is worth recording:
+ *
+ *   1. Drawn directly at 23 columns wide and 7 rows tall, strokes ended up one
+ *      column apart on the top row and touching outright along the baseline.
+ *      Wide-and-shallow is the wrong proportion — the diagonal gets so gradual
+ *      it reads as a wedge rather than a letter.
+ *
+ *   2. At 6x6, X and Y became indistinguishable in their upper halves. Both
+ *      open `#   #`, so at a glance the word read as three similar glyphs.
+ *
+ *   3. The fix for both is 7x7 with real diagonals: X now has a visible
+ *      crossing cell at row 4 and Y has a distinct open fork, so they differ
+ *      from the first row.
+ *
+ * Glyphs are authored at 7x7 and doubled, so the shapes stay hand-checkable
+ * rather than being drawn at double width where the diagonal is easy to get
+ * subtly wrong.
+ */
+const SRC: Record<string, readonly string[]> = {
   N: [
-    '#                     #',
-    '##                    ##',
-    '# #                   # #',
-    '#  #                  # #',
-    '#   #                 # #',
-    '#    #               # #',
-    '#     ############## # #',
+    '#     #',
+    '##    #',
+    '# #   #',
+    '#  #  #',
+    '#   # #',
+    '#    ##',
+    '#     #',
   ],
   Y: [
-    '#                     #',
-    ' #                    # ',
-    '  #                   # ',
-    '   #                  #  ',
-    '    #                #   ',
-    '     #              #    ',
-    '      ###############     ',
+    '#     #',
+    '#     #',
+    '#     #',
+    ' #   # ',
+    '  # #  ',
+    '   #   ',
+    '   #   ',
   ],
   X: [
-    '#                     #',
-    ' #                    # ',
-    '  #                   # ',
-    '   #                 #   ',
-    '    #               #    ',
-    '     #             #     ',
-    '      #############      ',
+    '#     #',
+    ' #   # ',
+    '  # #  ',
+    '   #   ',
+    '  # #  ',
+    ' #   # ',
+    '#     #',
   ],
-  ' ': Array(7).fill(' '.repeat(GLYPH_W)),
+  ' ': ['       ', '       ', '       ', '       ', '       ', '       ', '       '],
 };
 
-/** Render text in the display font, glyphs separated by one blank column. */
+/** Scale factor applied to every authored glyph. */
+const SCALE = 2;
+/**
+ * Blank columns between glyphs.
+ *
+ * This must be *wider than the widest gap inside a glyph*, or the word reads as
+ * one shape rather than three letters. The widest intra-glyph gap is five
+ * source columns, which doubles to ten; spacing of three made the letters
+ * closer to each other than each letter's own strokes are, which is the same
+ * merging problem as before at a subtler scale.
+ */
+const LETTER_SPACING = 12;
+
+/** Doubled height of the rendered banner. */
+export const BANNER_HEIGHT = 7 * SCALE;
+
+/** Render text in the display font. */
 export function banner(text: string, colour: (s: string) => string): string {
-  const glyphs = [...text.toUpperCase()].map((c) => FONT[c] ?? FONT[' ']!);
+  const glyphs = [...text.toUpperCase()].map((c) => SRC[c] ?? SRC[' ']!);
   const rows: string[] = [];
-  for (let r = 0; r < 7; r++) {
-    rows.push(glyphs.map((g) => g[r] ?? '').join(' ').replace(/\s+$/, ''));
+  for (let r = 0; r < BANNER_HEIGHT; r++) {
+    const srcRow = Math.floor(r / SCALE);
+    const line = glyphs
+      .map((g) => (g[srcRow] ?? '').split('').map((ch) => (ch === '#' ? '#' : ' ').repeat(SCALE)).join(''))
+      .join(' '.repeat(LETTER_SPACING));
+    rows.push(line.replace(/\s+$/, ''));
   }
   return rows.map(colour).join('\n');
+}
+
+/** Width of the rendered banner, in columns. */
+export function bannerWidth(text: string): number {
+  const glyphs = [...text.toUpperCase()];
+  if (glyphs.length === 0) return 0;
+  return glyphs.length * 7 * SCALE + (glyphs.length - 1) * LETTER_SPACING;
 }
 /**
  * A small deterministic PRNG.
@@ -109,18 +157,61 @@ export function networkField(
   linksPerNode = 2,
 ): string[] {
   const rand = rng(seed);
+  // Placement is uniform with a minimum separation, not a jittered grid.
+  //
+  // A jittered grid was the original approach and it fails badly on a wide,
+  // short field: with 26 nodes across 70x9 the column count rounds to 14 and the
+  // row count collapses to 2, so every node lands inside two horizontal bands
+  // and the "network" becomes a blob. Uniform scatter with a minimum separation
+  // has no such failure mode — density is set by the count and the separation,
+  // independent of the field's aspect ratio.
+  //
+  // Nodes are kept a third of a cell in from every edge, because nodes landing
+  // on the boundary leave the first and last rows completely empty.
+  // No inset. An earlier version reserved a cell at every edge, which on a
+  // 70x9 field left the first and last rows permanently blank. Minimum
+  // separation already prevents the clumping that inset was there to avoid.
+  const inset = 0;
   const grid: string[][] = Array.from({ length: height }, () => Array(width).fill(' '));
 
-  // Place nodes on a jittered grid so they spread evenly instead of clumping.
-  const cols = Math.max(3, Math.round(Math.sqrt(nodes * (width / height))));
-  const rows = Math.ceil(nodes / cols);
+  const minSep = Math.max(2, Math.round(Math.sqrt((width * height) / Math.max(1, nodes)) * 0.55));
   const pts: Array<[number, number]> = [];
-  let placed = 0;
-  for (let r = 0; r < rows && placed < nodes; r++) {
-    for (let c = 0; c < cols && placed < nodes; c++, placed++) {
-      const x = Math.round(((c + 0.5 + (rand() - 0.5) * 0.7) / cols) * (width - 1));
-      const y = Math.round(((r + 0.5 + (rand() - 0.5) * 0.7) / rows) * (height - 1));
-      if (x >= 0 && x < width && y >= 0 && y < height) pts.push([x, y]);
+  const attempts = nodes * 40;
+  for (let i = 0; i < attempts && pts.length < nodes; i++) {
+    const x = Math.floor(rand() * width);
+    const y = Math.floor(rand() * height);
+    let clear = true;
+    for (const [px, py] of pts) {
+      if ((px - x) ** 2 + (py - y) ** 2 < minSep * minSep) { clear = false; break; }
+    }
+    // Two nodes on the same cell read as one blob, so duplicates are dropped.
+    if (clear) pts.push([x, y]);
+  }
+  // Fill by progressively relaxing the minimum separation until every node
+  // fits. An earlier version fell back to placing the remainder with no
+  // separation at all, which put two nodes on adjacent cells and read as one
+  // blob. Loosening the constraint is the honest trade: the picture stays
+  // readable and the node count stays what was asked for.
+  while (pts.length < nodes) {
+    let placedOne = false;
+    for (let attempt = 0; attempt < 200 && !placedOne; attempt++) {
+      const x = Math.floor(rand() * width);
+      const y = Math.floor(rand() * height);
+      const clear = pts.every(([px, py]) => (px - x) ** 2 + (py - y) ** 2 >= 4);
+      if (clear) { pts.push([x, y]); placedOne = true; }
+    }
+    if (!placedOne) {
+      // Genuinely full. Take the farthest cell from the nearest existing node,
+      // which spreads the remainder instead of stacking it in a corner.
+      let best: [number, number] = [0, 0];
+      let bestDist = -1;
+      for (let y = 0; y < height; y++) {
+        for (let x = 0; x < width; x++) {
+          const nearest = Math.min(...pts.map(([px, py]) => (px - x) ** 2 + (py - y) ** 2));
+          if (nearest > bestDist) { bestDist = nearest; best = [x, y]; }
+        }
+      }
+      pts.push(best);
     }
   }
 

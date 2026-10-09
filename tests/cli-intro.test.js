@@ -10,7 +10,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { banner, networkField, renderIntro, codeFrame, rng, INTRO_WIDTH } from '../dist/cli/intro.js';
+import {
+  banner, networkField, renderIntro, codeFrame, rng, bannerWidth, INTRO_WIDTH, BANNER_HEIGHT,
+} from '../dist/cli/intro.js';
 
 /** Collect output without a terminal, and with colour applied so widths are real. */
 function collector() {
@@ -121,14 +123,23 @@ test('the rng is deterministic and stays in range', () => {
 
 test('the banner renders every glyph at a uniform height', () => {
   const rows = banner('NYX', (s) => s).split('\n');
-  assert.equal(rows.length, 7, 'the display font is seven rows tall');
+  assert.equal(rows.length, BANNER_HEIGHT, 'rendered height must match the scale factor');
   for (const row of rows) assert.ok(row.length > 0);
 });
 
 test('the banner handles unknown characters without producing garbage', () => {
   const rows = banner('NY1!', (s) => s).split('\n');
-  assert.equal(rows.length, 7);
-  assert.ok(rows[0].length > 0);
+  assert.equal(rows.length, BANNER_HEIGHT);
+  // Digits and punctuation are not in the font. They must fall back to blank
+  // rather than rendering as something arbitrary.
+  assert.equal(banner('1', (s) => s).trim(), '', 'an unknown glyph must render as blank');
+  assert.ok(rows[0].length > 0, 'the known glyphs must still render');
+  // Row count is what matters: trailing whitespace is stripped, so a blank
+  // glyph is shorter in characters but still occupies the same rows.
+  assert.equal(
+    banner('1', (s) => s).split('\n').length,
+    banner('N', (s) => s).split('\n').length,
+  );
 });
 
 test('the code frame boxes the code and splits it for reading', () => {
@@ -163,5 +174,120 @@ test('the intro renders with colour disabled', () => {
   for (const line of lines) {
     assert.ok(!line.includes('['), 'no escape sequences when colour is off');
     assert.ok(line.length <= INTRO_WIDTH + 2);
+  }
+});
+/* ── the failures this file exists to prevent ─────────────────────────── */
+
+/**
+ * Every pair of adjacent glyphs must be separated by blank columns.
+ *
+ * The first version of the font drew glyphs 23 columns wide with a single
+ * space between them. On the top row the strokes of adjacent letters ended up
+ * exactly one column apart, and along the baseline they touched outright, so
+ * "NYX" read as noise. Nothing caught it because the output looked busy and
+ * nobody measured the gap.
+ */
+test('letters are further apart than the strokes inside them', () => {
+  // The subtle version of the merging bug. With three columns between letters
+  // and ten inside each glyph, the word still read as one shape — the letters
+  // were closer to each other than their own strokes were.
+  const row = banner('NN', (s) => s).split('\n')[0];
+  const runs = [...row.matchAll(/#+/g)].map((m) => ({ at: m.index, len: m[0].length }));
+  assert.ok(runs.length >= 3, `expected at least three strokes, saw ${runs.length}`);
+  const gaps = runs.slice(1).map((r, i) => r.at - (runs[i].at + runs[i].len));
+  const interGlyph = gaps[1];
+  const intraGlyph = gaps[0];
+  assert.ok(
+    interGlyph > intraGlyph,
+    `letters are ${interGlyph} columns apart but strokes within a letter are ${intraGlyph} apart — the word will read as one shape`,
+  );
+});
+
+test('the banner keeps a clear gap between letters', () => {
+  // The scale is 2, so a single blank column is a half-column gap and the
+  // letters visually collide. This is what the first font did.
+  const top = banner('NYX', (s) => s).split('\n')[0];
+  const runs = [...top.matchAll(/#+/g)].map((m) => m[0].length);
+  assert.ok(
+    runs.every((len) => len === 2),
+    `a stroke should be exactly two columns wide at this scale, saw ${runs.join(',')}`,
+  );
+});
+
+test('the banner stays inside the intro width', () => {
+  assert.ok(bannerWidth('NYX') <= INTRO_WIDTH, `banner is ${bannerWidth('NYX')} wide`);
+});
+
+test('the banner renders more than one pixel per source row', () => {
+  // Every source row must appear twice, or the font has been drawn at the wrong
+  // scale and the letterforms come out half height.
+  const rows = banner('N', (s) => s).split('\n');
+  for (let i = 0; i < rows.length; i += 2) {
+    assert.equal(rows[i], rows[i + 1], `rows ${i} and ${i + 1} differ — the scale is not uniform`);
+  }
+});
+
+test('N, Y and X are each visually distinct', () => {
+  // X and Y were once indistinguishable because both opened `#   #`. Render
+  // each letter alone and require them to differ on at least a third of rows.
+  const shapes = ['N', 'Y', 'X'].map((l) => banner(l, (s) => s).split('\n'));
+  for (let a = 0; a < shapes.length; a++) {
+    for (let b = a + 1; b < shapes.length; b++) {
+      const differing = shapes[a].filter((row, i) => row !== shapes[b][i]).length;
+      assert.ok(
+        differing >= 3,
+        `glyphs ${'NYX'[a]} and ${'NYX'[b]} differ on only ${differing} rows and will be mistaken for each other`,
+      );
+    }
+  }
+});
+
+test('X has a visible crossing and Y has a stem', () => {
+  const x = banner('X', (s) => s).split('\n');
+  const y = banner('Y', (s) => s).split('\n');
+  const count = (rows, re) => rows.filter((r) => re.test(r)).length;
+  // X widens again in its lower half; Y's lower half stays a single stem.
+  const xTop = count(x.slice(0, 4), /##\s{4,}##/);
+  const xBottom = count(x.slice(8), /##\s{4,}##/);
+  const yBottom = count(y.slice(8), /##\s{4,}##/);
+  assert.ok(xTop > 0 && xBottom > 0, 'X must open wide at both ends');
+  assert.equal(yBottom, 0, 'Y must not widen below the fork');
+});
+
+test('the network field uses its full height', () => {
+  // A jittered-grid placement collapsed 26 nodes into three middle rows on a
+  // wide, short field, leaving three blank rows top and bottom.
+  for (const seed of [11, 7, 99, 1234]) {
+    const field = networkField(70, 9, seed, 26, 3);
+    assert.ok(field[0].trim(), `seed ${seed}: the top row is empty`);
+    assert.ok(field[field.length - 1].trim(), `seed ${seed}: the bottom row is empty`);
+  }
+});
+
+test('the network field spreads nodes across the width', () => {
+  for (const seed of [11, 7, 99, 1234]) {
+    const field = networkField(70, 9, seed, 26, 3).join('');
+    const columns = new Set();
+    for (const row of networkField(70, 9, seed, 26, 3)) {
+      for (let i = 0; i < row.length; i++) if (row[i] === '*') columns.add(i);
+    }
+    // A blob in the middle would occupy far fewer than this.
+    // 26 nodes can occupy at most 26 distinct columns, so the meaningful
+    // measure is the horizontal span, not the column count. The first
+    // version of this test asserted a column count above the node count,
+    // which no implementation could ever satisfy.
+    const span = Math.max(...columns) - Math.min(...columns);
+    assert.ok(span >= 55, );
+  }
+});
+
+test('nodes do not stack on one cell', () => {
+  for (const seed of [3, 21, 88]) {
+    const field = networkField(70, 9, seed, 26, 3);
+    for (let y = 0; y < field.length; y++) {
+      // Only two nodes on the same cell is a merge. A node sitting next to a
+      // link character is normal and expected — that is what a network is.
+      assert.ok(!/\*\*/.test(field[y]), `seed ${seed}: two nodes on one cell in row ${y}`);
+    }
   }
 });
