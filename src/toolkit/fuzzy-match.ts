@@ -167,15 +167,48 @@ export interface Resolution {
 }
 
 /**
+ * Locale for the human-facing text.
+ *
+ * `'id'` is not a translation pass over the English string — it has its own
+ * catalogue in `i18n-id.ts`, written the way Indonesian is actually written
+ * rather than translated word-for-word. Anything else falls back to English.
+ */
+export type MessageLocale = 'en' | 'id';
+
+const MESSAGES: Record<MessageLocale, {
+  noClose: (token: string, count: number) => string;
+  fuzzyHead: (token: string) => string;
+  fuzzyFooter: string;
+}> = {
+  en: {
+    noClose: (token, count) => `No command matches "${token}", and nothing close either.\n`
+      + `This bot has ${count} commands — try "menu" or "help" to browse them.`,
+    fuzzyHead: (token) => `No command called "${token}". Closest:`,
+    fuzzyFooter: 'Percent is how close the words are, not a confidence score. Re-run with the exact name.',
+  },
+  id: {
+    noClose: (token, count) => `Perintah \`${token}\` nggak ada, dan yang mirip juga nggak ada.\n`
+      + `Flux punya ${count} perintah — coba \`menu\` atau \`help\` buat lihat semuanya.`,
+    fuzzyHead: (token) => `Ga ada perintah \`${token}\`. Yang paling mirip:`,
+    fuzzyFooter: 'Angkanya seberapa mirip teksnya, bukan tingkat keyakinan. Panggil ulang pakai nama yang persis.',
+  },
+};
+
+/**
  * Resolve a token to a command.
  *
  * Returns the closest options rather than guessing. `fuzzy` means "no exact
  * match, but here is what you probably meant" — the caller still has to choose,
  * which is the point.
  */
-export function resolve(reg: CommandRegistry, input: string, options: MatchOptions = {}): Resolution {
+export function resolve(
+  reg: CommandRegistry,
+  input: string,
+  options: MatchOptions & { locale?: MessageLocale } = {},
+): Resolution {
   const limit = options.limit ?? 5;
   const token = input.toLowerCase().trim();
+  const copy = MESSAGES[options.locale ?? 'en'];
 
   if (!token) {
     return { status: 'unknown', suggestions: [], message: 'No command given.' };
@@ -196,8 +229,7 @@ export function resolve(reg: CommandRegistry, input: string, options: MatchOptio
     return {
       status: 'unknown',
       suggestions: [],
-      message: `No command matches "${token}", and nothing close either.\n`
-        + `This bot has ${reg.size} commands — try "menu" or "help" to browse them.`,
+      message: copy.noClose(token, reg.size),
     };
   }
 
@@ -206,11 +238,6 @@ export function resolve(reg: CommandRegistry, input: string, options: MatchOptio
   return {
     status: 'fuzzy',
     suggestions,
-    message: [
-      `No command called "${token}". Closest:`,
-      ...lines,
-      '',
-      'Percent is how close the words are, not a confidence score. Re-run with the exact name.',
-    ].join('\n'),
+    message: [copy.fuzzyHead(token), ...lines, '', copy.fuzzyFooter].join('\n'),
   };
 }

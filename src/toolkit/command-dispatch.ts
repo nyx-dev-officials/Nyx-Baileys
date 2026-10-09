@@ -25,7 +25,8 @@
  */
 
 import type { CommandRegistry, CommandResult } from './command-registry.js';
-import { resolve, type MatchOptions } from './fuzzy-match.js';
+import { resolve, type MatchOptions, type MessageLocale } from './fuzzy-match.js';
+import { t as id } from './i18n-id.js';
 
 export interface DispatchOptions {
   /** Also accept the command with no prefix at all. Default false. */
@@ -33,8 +34,12 @@ export interface DispatchOptions {
   /** Prefix forms to strip before parsing. */
   prefixes?: string[];
   fuzzy?: MatchOptions;
+  /** Language for human-facing text. Default 'en'. */
+  locale?: MessageLocale;
   /** Called when `resolve` returns status `fuzzy`. Defaults to the built-in text. */
   onFuzzy?: (message: string) => string | Promise<string>;
+  /** Locale strings, from `i18n-id.ts`. Defaults to Indonesian when locale is id. */
+  t?: (key: string, vars?: Record<string, string | number>) => string;
 }
 
 /**
@@ -129,21 +134,29 @@ export async function dispatch(
   options: DispatchOptions & { sender?: string; isOwner?: boolean } = {},
 ): Promise<DispatchResult> {
   const parsed = route(reg, body, options);
+  const locale = options.locale ?? 'en';
+  // Indonesian has a real catalogue; English keeps its own copy in the matcher.
+  const say = options.t ?? (locale === 'id' ? id : undefined);
 
   if (!parsed.token) {
-    return { outcome: 'no-prefix', text: 'Usage: flux <command> [args]' };
+    return {
+      outcome: 'no-prefix',
+      text: say?.('usage.prompt', { example: 'flux help' }) ?? 'Usage: flux <command> [args]',
+    };
   }
 
   // A bare command is refused by default — the prefix is the contract.
   if (!parsed.prefixed && !options.allowBare) {
     return {
       outcome: 'no-prefix',
-      text: `"${parsed.token}" needs the flux prefix.\nTry: flux ${parsed.token}\n\n`
-        + 'Commands: flux menu · flux help · flux search <term>',
+      text: say
+        ? `${say('prefix.required', { prefix: 'flux', token: parsed.token })}\n\n${say('usage.hint')}`
+        : `"${parsed.token}" needs the flux prefix.\nTry: flux ${parsed.token}\n\n`
+          + 'Commands: flux menu · flux help · flux search <term>',
     };
   }
 
-  const resolution = resolve(reg, parsed.token, options.fuzzy);
+  const resolution = resolve(reg, parsed.token, { ...options.fuzzy, locale });
 
   if (resolution.status === 'exact' && resolution.command) {
     const result = await reg.run(sock, jid, resolution.command, parsed.args, {
