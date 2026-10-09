@@ -648,8 +648,16 @@ export function normalisePhone(raw: string): string {
  */
 async function requestPhoneCode(io: Reporter, sock: CoreSocket, digits: string): Promise<string> {
   const code = await sock.requestPairingCode(digits);
+  // The code is the one thing the operator has, for about half a minute, and
+  // the one thing they must not mistype. So it gets the strongest visual
+  // treatment available and nothing else sits near it.
+  io.line();
+  codeFrame(code, (s) => io.c(s, 'cyan'));
+  io.line();
   io.pairing([['phone code', formatPairingCode(code)]]);
-  io.line('WhatsApp → Linked devices → Link a device, then type that code in. It expires in about 30 seconds.');
+  io.line();
+  io.line(`  ${io.c('sent to', 'dim')}  ${digits}`);
+  io.line(`  ${io.c('valid for', 'dim')}  about 30 seconds`);
   io.line();
   return code;
 }
@@ -711,67 +719,52 @@ async function cmdPair(ctx: CommandContext): Promise<ExitCode> {
   const interactive = process.stdin.isTTY === true && !io.json;
   const wantsHelp = flagBool(args, 'help-intro', false);
 
-  // Introduction first. A first run that opens with "Session directory:" and a
-  // flag table reads like an internal tool, and the one thing a new operator
-  // needs to know — that this links their personal WhatsApp to a running
-  // process — is buried. `--phone` skips straight past this.
-  if (!phone && !wantsHelp) {
-    // Checked before the number is typed, because the most common failure on a
-    // second run is pointing at a directory that already holds a different
-    // account. Catching it here means the question about the number is never
-    // asked for a pairing that cannot happen.
-    const pre = await readSession(ctx.env.sessionDir);
-    if (pre.registered) {
-      printIntroduction(io, ctx);
-      io.line();
-      io.warn(`${ctx.env.sessionDir} is already paired as ${pre.jid ?? 'another number'}.`);
-      io.line('Each number needs its own session directory, or the second one');
-      io.line('will overwrite the first.');
-      io.line();
-      if (!interactive) {
-        io.line('Pass a different directory, for example:');
-        io.line('  nyx-baileys pair --dir ./session-2');
-        io.emit('pair', { paired: false, reason: 'dir-in-use', interactive: false });
-        return EXIT.usage;
-      }
-      const suggested = `${ctx.env.sessionDir.replace(/[\\/]+$/, '')}-2`;
-      const chosen = await ask('Session directory for the new number', suggested);
-      if (chosen) ctx.env.sessionDir = chosen;
-      io.line();
-      io.line(`Using: ${ctx.env.sessionDir}`);
-    }
-  }
-
-  if (!phone && !wantsHelp) {
-    printIntroduction(io, ctx);
-    if (!interactive) {
-      io.line();
-      io.line('Not a terminal, so there is nothing to prompt on. Pass the number:');
-      io.line('  nyx-baileys pair --phone 628XXXXXXXXX');
-      io.emit('pair', { paired: false, reason: 'no-phone', interactive: false });
-      return EXIT.usage;
-    }
-    const answer = await ask('WhatsApp number (country code, digits only)', ctx.env.sessionDir);
-    phone = answer;
-    if (!phone) {
-      io.line();
-      io.line('Nothing entered, so nothing was changed.');
-      io.emit('pair', { paired: false, reason: 'cancelled', interactive: true });
-      return EXIT.ok;
-    }
-  }
-
-  // Checked before the socket opens, not at the point of use: a typo here would
-  // otherwise cost a full connect attempt — and WhatsApp counts those.
+  /**
+   * Phone validation runs first, before any session or socket work.
+   *
+   * A malformed number is a pure argument error. If the session check ran
+   * first, `--phone 123` pointed at a poisoned directory would report a
+   * half-finished pairing rather than the obvious typo, and pointing it at a
+   * live one would cost a connection attempt that WhatsApp counts.
+   */
   let digits = '';
   if (phone) {
     digits = normalisePhone(phone);
     if (digits.length < 8) {
       throw new UsageError(
         `--phone needs a full international number, got \`${phone}\``,
-        'for example: nyx-baileys pair --phone 6283831459585',
+        'for example: npm run pair -- --phone 6283831459585',
       );
     }
+  }
+
+  /**
+   * Session state is checked before the introduction is shown.
+   *
+   * Showing a full-screen banner and then refusing to pair is worse than either
+   * alone: the operator reads a welcome, types nothing, and gets an error about
+   * a half-finished pairing they never knew about. A command that is going to
+   * refuse should say so first and stay quiet.
+   */
+  const pre = await readSession(ctx.env.sessionDir);
+
+  if (!phone && !wantsHelp && pre.registered && interactive) {
+    // Only a genuine interactive run gets the offer of another directory. In
+    // every other case the normal "already paired" report below is correct.
+    printIntroduction(io, ctx);
+    io.line();
+    io.warn(`${ctx.env.sessionDir} already holds ${pre.jid ?? 'another number'}.`);
+    io.line('A second number needs its own directory, or it overwrites the first.');
+    io.line();
+    const suggested = `${ctx.env.sessionDir.replace(/[\\/]+$/, '')}-2`;
+    const chosen = await ask('Session directory for the new number', suggested);
+    if (!chosen) {
+      io.line();
+      io.line('Nothing changed.');
+      io.emit('pair', { paired: true, alreadyPaired: true, number: pre.jid, dir: pre.path });
+      return EXIT.ok;
+    }
+    ctx.env.sessionDir = chosen;
   }
 
   const existing = await readSession(ctx.env.sessionDir);
@@ -796,6 +789,28 @@ async function cmdPair(ctx: CommandContext): Promise<ExitCode> {
     io.warn(`clearing the half-finished pairing in ${existing.path} (--reset)`);
     await new FileSessionStore({ dir: existing.path }).clear();
   }
+
+  // Everything below this point is going to open a socket, so now — and only
+  // now — is the right moment for the introduction and the prompt.
+  if (!phone && !wantsHelp) {
+    printIntroduction(io, ctx);
+    if (!interactive) {
+      io.line();
+      io.line('Not a terminal, so there is nothing to prompt on. Pass the number:');
+      io.line('  npm run pair -- --phone 628XXXXXXXXX');
+      io.emit('pair', { paired: false, reason: 'no-phone', interactive: false });
+      return EXIT.usage;
+    }
+    const answer = await ask('WhatsApp number — country code, digits only', '');
+    phone = answer;
+    if (!phone) {
+      io.line();
+      io.line('Nothing entered, so nothing was changed.');
+      io.emit('pair', { paired: false, reason: 'cancelled', interactive: true });
+      return EXIT.ok;
+    }
+  }
+
 
   io.line(`Session directory: ${existing.path}`);
   io.line('Opening the socket…');

@@ -172,8 +172,12 @@ function drawLine(
 export function codeFrame(code: string, colour: (s: string) => string): string {
   const inner = WIDTH - 4;
   const grouped = code.length === 8 ? `${code.slice(0, 4)}  ${code.slice(4)}` : code;
+  // Clamp rather than pad a negative amount. An over-long code would otherwise
+  // overflow the border and leave the frame with ragged sides, which is exactly
+  // the kind of thing that looks fine in a test and breaks in a terminal.
+  const shown = grouped.length > inner - 2 ? grouped.slice(0, inner - 5) + '...' : grouped;
   const top = `+${'-'.repeat(inner)}+`;
-  const mid = `|${' '.repeat(Math.max(0, inner - grouped.length - 2))}${grouped}  |`;
+  const mid = `|${' '.repeat(Math.max(0, inner - shown.length - 2))}${shown}  |`;
   const bottom = `+${'-'.repeat(inner)}+`;
   return [top, mid, bottom].map((l) => colour(l)).join('\n');
 }
