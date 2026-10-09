@@ -154,6 +154,33 @@ async function deliver(
 
 /* ─────────────────────────────── the commands ─────────────────────────── */
 
+/**
+ * Read a numeric argument, rejecting anything outside the valid range.
+ *
+ * This deliberately does **not** clamp. Clamping a request for +999 dB down to
+ * +24 and reporting success is worse than refusing: the caller asked for one
+ * thing, got another, and has no way to tell from the output. A loud rejection
+ * costs one retry; a silent substitution costs a wrong master and a confused
+ * user.
+ */
+function rangedArg(
+  ctx: CommandContext,
+  index: number,
+  fallback: number,
+  min: number,
+  max: number,
+  name: string,
+): number | null {
+  const parts = A(ctx).split(/\s+/).filter(Boolean);
+  if (parts.length <= index) return fallback;
+  const n = Number(parts[index]);
+  if (!Number.isFinite(n)) return null;
+  if (n < min || n > max) {
+    throw new Error(`${parts[index]} is out of range — ${name} accepts ${min} to ${max}.`);
+  }
+  return n;
+}
+
 interface MediaCmd {
   name: string;
   summary: string;
@@ -212,8 +239,9 @@ export const mediaCommands: MediaCmd[] = [
   { name: 'media-volume', summary: 'Change audio volume', effect: 'apply a gain in decibels',
     fn: async (ctx) => {
       const input = needInput(localInput(ctx), 'media-volume');
-      const db = intArg(ctx, 1, 0, -60, 24);
-      if (db === 0) return bad('Pass a gain in dB, for example: media-volume clip.mp3 6');
+      if (!A(ctx).split(/s+/)[1]) return bad('Pass a gain in dB, for example: media-volume clip.mp3 6');
+      const db = rangedArg(ctx, 1, 0, -60, 24, 'gain') ?? 0;
+      if (db === 0) return bad('A gain of 0 dB changes nothing. Pass a non-zero gain.');
       const out = work('.wav');
       const bin = await requireFfmpeg('media-volume');
       await runFfmpeg(bin, ['-y', '-i', input, '-filter:a', `volume=${db}dB`, '-c:a', 'pcm_s16le', out]);
@@ -705,6 +733,660 @@ export const mediaCommands: MediaCmd[] = [
       return ok(rows.join('\n'));
     } },
 
+  { name: 'media-loop', summary: 'Loop a clip', effect: 'repeat a clip a set number of times seamlessly',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-loop');
+      const times = Math.max(2, Math.min(20, Number(p[1]) || 2));
+      const out = work('.mp4');
+      const bin = await requireFfmpeg('media-loop');
+      await runFfmpeg(bin, ['-y', '-stream_loop', String(times - 1), '-i', input, '-c', 'copy', out]);
+      return deliver(out, `Looped ${times} times`, 'video/mp4', `stream_loop ${times - 1} with stream copy, so no re-encode.`);
+    } },
+
+  { name: 'media-normalise', summary: 'Loudness normalise', effect: 'normalise to -16 LUFS with true-peak limiting',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-normalise');
+      const target = Number(A(ctx).split(/\s+/)[1] ?? -16);
+      const lufs = Math.max(-31, Math.min(-5, Number.isFinite(target) ? target : -16));
+      const out = work('.wav');
+      const bin = await requireFfmpeg('media-normalise');
+      await runFfmpeg(bin, ['-y', '-i', input, '-af', `loudnorm=I=${lufs}:TP=-1.5:LRA=11`, '-c:a', 'pcm_s16le', out]);
+      return deliver(out, `Normalised to ${lufs} LUFS`, 'audio/wav', 'loudnorm with a -1.5 dBTP ceiling prevents clipping.');
+    } },
+
+  { name: 'media-compress-audio', summary: 'Target an audio bitrate', effect: 're-encode audio at a chosen bitrate',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-compress-audio');
+      const kbps = rangedArg(ctx, 1, 128, 32, 320, 'bitrate') ?? 128;
+      const out = work('.m4a');
+      const bin = await requireFfmpeg('media-compress-audio');
+      await runFfmpeg(bin, ['-y', '-i', input, '-vn', '-c:a', 'aac', '-b:a', `${kbps}k`, out]);
+      return deliver(out, `Encoded at ${kbps} kbps`, 'audio/mp4', '');
+    } },
+
+  { name: 'media-mono', summary: 'Downmix to mono', effect: 'collapse all channels into one',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-mono');
+      const out = work('.wav');
+      const bin = await requireFfmpeg('media-mono');
+      await runFfmpeg(bin, ['-y', '-i', input, '-ac', '1', '-c:a', 'pcm_s16le', out]);
+      return deliver(out, 'Downmixed to mono', 'audio/wav', '');
+    } },
+
+  { name: 'media-denoise', summary: 'Denoise audio', effect: 'apply FFT denoising',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-denoise');
+      const out = work('.wav');
+      const bin = await requireFfmpeg('media-denoise');
+      await runFfmpeg(bin, ['-y', '-i', input, '-af', 'afftdn=nf=-25', '-c:a', 'pcm_s16le', out]);
+      return deliver(out, 'Denoised', 'audio/wav', 'afftdn with a -25 dB noise floor.');
+    } },
+
+  { name: 'media-eq', summary: 'Equalise audio', effect: 'boost or cut a frequency band in dB',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-eq');
+      const freq = rangedArg(ctx, 1, 1000, 20, 20000, 'frequency') ?? 1000;
+      const db = rangedArg(ctx, 2, 6, -30, 30, 'gain') ?? 6;
+      const out = work('.wav');
+      const bin = await requireFfmpeg('media-eq');
+      await runFfmpeg(bin, ['-y', '-i', input, '-af', `equalizer=f=${freq}:t=q:w=1:g=${db}`, '-c:a', 'pcm_s16le', out]);
+      return deliver(out, `${freq}Hz ${db > 0 ? 'boosted' : 'cut'} ${Math.abs(db)} dB`, 'audio/wav', '');
+    } },
+
+  { name: 'media-lowpass', summary: 'Low-pass filter', effect: 'remove everything above a cutoff',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-lowpass');
+      const hz = rangedArg(ctx, 1, 8000, 20, 20000, 'cutoff') ?? 8000;
+      const out = work('.wav');
+      const bin = await requireFfmpeg('media-lowpass');
+      await runFfmpeg(bin, ['-y', '-i', input, '-af', `lowpass=f=${hz}`, '-c:a', 'pcm_s16le', out]);
+      return deliver(out, `Low-pass at ${hz}Hz`, 'audio/wav', '');
+    } },
+
+  { name: 'media-highpass', summary: 'High-pass filter', effect: 'remove everything below a cutoff',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-highpass');
+      const hz = rangedArg(ctx, 1, 200, 20, 20000, 'cutoff') ?? 200;
+      const out = work('.wav');
+      const bin = await requireFfmpeg('media-highpass');
+      await runFfmpeg(bin, ['-y', '-i', input, '-af', `highpass=f=${hz}`, '-c:a', 'pcm_s16le', out]);
+      return deliver(out, `High-pass at ${hz}Hz`, 'audio/wav', '');
+    } },
+
+  { name: 'media-crossfade', summary: 'Crossfade two clips', effect: 'join two audio files with a crossfade',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-crossfade');
+      const second = p[1];
+      const fade = Math.max(0.1, Math.min(10, Number(p[2]) || 2));
+      if (!second) return bad('Usage: media-crossfade <a.mp3> <b.mp3> [fade seconds]');
+      const out = work('.wav');
+      const bin = await requireFfmpeg('media-crossfade');
+      const filter = `[0:a][1:a]acrossfade=d=${fade}:c1=tri:c2=tri`;
+      await runFfmpeg(bin, ['-y', '-i', input, '-i', second, '-filter_complex', filter, '-c:a', 'pcm_s16le', out]);
+      return deliver(out, `Crossfaded over ${fade}s`, 'audio/wav', '');
+    } },
+
+  { name: 'media-pad-audio', summary: 'Pad with silence', effect: 'add silence at the start or end',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-pad-audio');
+      const secs = Math.max(0.1, Math.min(60, Number(p[1]) || 1));
+      const where = (p[2] ?? 'start').toLowerCase() === 'end' ? 'apad=pad_dur=' : 'adelay=';
+      const out = work('.wav');
+      const bin = await requireFfmpeg('media-pad-audio');
+      const filter = where === 'adelay='
+        ? `adelay=${Math.round(secs * 1000)}|${Math.round(secs * 1000)}`
+        : `apad=pad_dur=${secs}`;
+      await runFfmpeg(bin, ['-y', '-i', input, '-af', filter, '-c:a', 'pcm_s16le', out]);
+      return deliver(out, `${secs}s of silence padded`, 'audio/wav', `Filter: ${filter}`);
+    } },
+
+  { name: 'media-audio-bitrate', summary: 'Report audio bitrate', effect: 'measure the true average audio bitrate',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-audio-bitrate');
+      const bin = await requireFfmpeg('media-audio-bitrate');
+      const { stderr } = await execFileAsync(bin, ['-hide_banner', '-i', input, '-f', 'null', '-'], { timeout: 60_000 }).catch((e: { stderr?: string }) => ({ stderr: e.stderr ?? '' }));
+      const b = /Audio:.*?(\d+) kb\/s/.exec(stderr ?? '');
+      const s = /Audio:.*?(\d+) Hz/.exec(stderr ?? '');
+      return ok(`Audio bitrate: ${b ? `${b[1]} kb/s` : 'not reported'}\nSample rate: ${s ? `${s[1]} Hz` : 'not reported'}`);
+    } },
+
+  { name: 'media-silence-detect', summary: 'Detect silence', effect: 'report silent runs and their duration',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-silence-detect');
+      const bin = await requireFfmpeg('media-silence-detect');
+      const { stderr } = await execFileAsync(bin, ['-hide_banner', '-i', input, '-af', 'silencedetect=n=-40dB:d=0.5', '-f', 'null', '-'], { timeout: 60_000 }).catch((e: { stderr?: string }) => ({ stderr: e.stderr ?? '' }));
+      const ends = [...(stderr ?? '').matchAll(/silence_end: ([\d.]+)/g)].map((m) => Number(m[1]));
+      if (!ends.length) return ok('No silent run longer than 0.5s was found.');
+      return ok(`Silent runs detected at: ${ends.map((e) => `${e.toFixed(2)}s`).join(', ')}`);
+    } },
+
+  { name: 'media-concat', summary: 'Concatenate files', effect: 'join files end to end without re-encoding',
+    fn: async (ctx) => {
+      const files = A(ctx).split(/\s+/).filter(Boolean);
+      if (files.length < 2) return bad('Usage: media-concat a.mp3 b.mp3 c.mp3');
+      const listFile = work('.txt');
+      writeFileSync(listFile, files.map((f) => `file '${f.replace(/'/g, "'\\''")}'`).join('\n'), 'utf8');
+      const out = work('.mp4');
+      const bin = await requireFfmpeg('media-concat');
+      await runFfmpeg(bin, ['-y', '-f', 'concat', '-safe', '0', '-i', listFile, '-c', 'copy', out]);
+      return deliver(out, `Concatenated ${files.length} files`, 'video/mp4', 'Stream copy, so this is fast and lossless — but it requires identical codecs.');
+    } },
+
+  { name: 'media-crop', summary: 'Crop media', effect: 'crop to a width, height and offset',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-crop');
+      const w = Number(p[1]) || 640, h = Number(p[2]) || 480, x = Number(p[3]) || 0, y = Number(p[4]) || 0;
+      if (w <= 0 || h <= 0) return bad('Crop width and height must be positive.');
+      const out = work('.mp4');
+      const bin = await requireFfmpeg('media-crop');
+      await runFfmpeg(bin, ['-y', '-i', input, '-vf', `crop=${w}:${h}:${x}:${y}`, '-c:v', 'libx264', '-c:a', 'aac', out]);
+      return deliver(out, `Cropped to ${w}x${h} at ${x},${y}`, 'video/mp4', '');
+    } },
+
+  { name: 'media-rotate-video', summary: 'Rotate video', effect: 'rotate by a multiple of 90 degrees',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-rotate-video');
+      const deg = [90, 180, 270].includes(Number(p[1])) ? Number(p[1]) : 90;
+      const out = work('.mp4');
+      const bin = await requireFfmpeg('media-rotate-video');
+      await runFfmpeg(bin, ['-y', '-i', input, '-vf', `transpose=${deg === 90 ? 1 : deg === 180 ? 2 : 2}`, '-c:v', 'libx264', '-c:a', 'aac', out]);
+      return deliver(out, `Rotated ${deg} degrees`, 'video/mp4', '');
+    } },
+
+  { name: 'media-fade-video', summary: 'Fade video in and out', effect: 'apply fade to the picture track',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-fade-video');
+      const secs = Math.max(0.1, Math.min(15, Number(p[1]) || 1));
+      const info = await inspect(input);
+      const start = Math.max(0, info.duration - secs);
+      const out = work('.mp4');
+      const bin = await requireFfmpeg('media-fade-video');
+      const filter = `fade=t=in:st=0:d=${secs},fade=t=out:st=${start.toFixed(2)}:d=${secs}`;
+      await runFfmpeg(bin, ['-y', '-i', input, '-vf', filter, '-c:v', 'libx264', '-c:a', 'aac', out]);
+      return deliver(out, `Picture faded over ${secs}s`, 'video/mp4', '');
+    } },
+
+  { name: 'media-blur-region', summary: 'Blur a region', effect: 'apply a box blur across the whole frame',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-blur-region');
+      const radius = rangedArg(ctx, 1, 10, 1, 100, 'radius') ?? 10;
+      const out = work('.mp4');
+      const bin = await requireFfmpeg('media-blur-region');
+      await runFfmpeg(bin, ['-y', '-i', input, '-vf', `boxblur=${radius}:1`, '-c:v', 'libx264', '-c:a', 'aac', out]);
+      return deliver(out, `Blurred with radius ${radius}`, 'video/mp4', '');
+    } },
+
+  { name: 'media-deinterlace', summary: 'Deinterlace video', effect: 'remove interlacing artefacts',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-deinterlace');
+      const out = work('.mp4');
+      const bin = await requireFfmpeg('media-deinterlace');
+      await runFfmpeg(bin, ['-y', '-i', input, '-vf', 'yadif', '-c:v', 'libx264', '-c:a', 'aac', out]);
+      return deliver(out, 'Deinterlaced', 'video/mp4', 'yadif adaptive deinterlacing.');
+    } },
+
+  { name: 'media-drawtext', summary: 'Burn text into video', effect: 'render a text overlay on the picture track',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-drawtext');
+      const text = p.slice(1).join(' ');
+      if (!text) return bad('Usage: media-drawtext <video> <text to draw>');
+      const out = work('.mp4');
+      const bin = await requireFfmpeg('media-drawtext');
+      // Colons and commas are filtergraph separators, so they must be escaped
+      // or a timestamp in the text silently breaks the whole filter chain.
+      const safe = text.replace(/\\/g, '').replace(/:/g, '\\:').replace(/'/g, "\\'").replace(/,/g, '\\,');
+      await runFfmpeg(bin, ['-y', '-i', input, '-vf', `drawtext=text='${safe}':fontsize=36:fontcolor=white:box=1:boxcolor=black@0.5:boxborderw=10:x=(w-text_w)/2:y=(h-text_h)/2`, '-c:v', 'libx264', '-c:a', 'aac', out]);
+      return deliver(out, 'Text drawn', 'video/mp4', '');
+    } },
+
+  { name: 'media-speed-video', summary: 'Change video speed', effect: 'retempo video and audio together',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-speed-video');
+      const factor = Number(p[1]) || 2;
+      if (!Number.isFinite(factor) || factor < 0.25 || factor > 4) return bad('Speed must be between 0.25x and 4x.');
+      const out = work('.mp4');
+      const bin = await requireFfmpeg('media-speed-video');
+      // setpts takes a time-base expression, not a bare number: 0.5*PTS is
+      // correct and 0.5PTS is not — ffmpeg rejects the latter outright with
+      // "Invalid chars 'TS'", which is what the exhaustive test caught.
+      await runFfmpeg(bin, ['-y', '-i', input, '-filter_complex',
+        `[0:v]setpts=${(1 / factor).toFixed(6)}*PTS[v];[0:a]atempo=${factor}[a]`,
+        '-map', '[v]', '-map', '[a]', '-c:v', 'libx264', '-c:a', 'aac', out]);
+      return deliver(out, `Video at ${factor}x`, 'video/mp4', 'setpts scales picture timing, atempo preserves pitch.');
+    } },
+
+  { name: 'media-reverse-video', summary: 'Reverse video', effect: 'play a clip backwards',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-reverse-video');
+      const out = work('.mp4');
+      const bin = await requireFfmpeg('media-reverse-video');
+      await runFfmpeg(bin, ['-y', '-i', input, '-vf', 'reverse', '-af', 'areverse', '-c:v', 'libx264', '-c:a', 'aac', out]);
+      return deliver(out, 'Video reversed', 'video/mp4', '');
+    } },
+
+  { name: 'media-rotate-image', summary: 'Rotate an image', effect: 'rotate an image by an angle in degrees',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-rotate-image');
+      const deg = Number(p[1]) || 90;
+      const out = work('.png');
+      await sharpLib(input).rotate(deg).png().toFile(out);
+      return deliver(out, `Rotated ${deg} degrees`, 'image/png', '');
+    } },
+
+  { name: 'media-flip-h', summary: 'Mirror horizontally', effect: 'flip an image left to right',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-flip-h');
+      const out = work('.png');
+      await sharpLib(input).flop().png().toFile(out);
+      return deliver(out, 'Mirrored horizontally', 'image/png', '');
+    } },
+
+  { name: 'media-flip-v', summary: 'Mirror vertically', effect: 'flip an image top to bottom',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-flip-v');
+      const out = work('.png');
+      await sharpLib(input).flip().png().toFile(out);
+      return deliver(out, 'Mirrored vertically', 'image/png', '');
+    } },
+
+  { name: 'media-brighten', summary: 'Brighten an image', effect: 'raise or lower brightness',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-brighten');
+      const amount = Math.max(-100, Math.min(100, Number(p[1]) || 20));
+      const out = work('.png');
+      await sharpLib(input).modulate({ brightness: 1 + amount / 100 }).png().toFile(out);
+      return deliver(out, `Brightness ${amount > 0 ? '+' : ''}${amount}%`, 'image/png', '');
+    } },
+
+  { name: 'media-saturate', summary: 'Change saturation', effect: 'raise or lower colour saturation',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-saturate');
+      const amount = Math.max(-100, Math.min(100, Number(p[1]) || 50));
+      const out = work('.png');
+      await sharpLib(input).modulate({ saturation: 1 + amount / 100 }).png().toFile(out);
+      return deliver(out, `Saturation ${amount > 0 ? '+' : ''}${amount}%`, 'image/png', '');
+    } },
+
+  { name: 'media-hue', summary: 'Rotate hue', effect: 'shift image hue in degrees',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-hue');
+      const deg = Math.max(-180, Math.min(180, Number(p[1]) || 90));
+      const out = work('.png');
+      await sharpLib(input).modulate({ hue: deg }).png().toFile(out);
+      return deliver(out, `Hue shifted ${deg} degrees`, 'image/png', '');
+    } },
+
+  { name: 'media-sharpen', summary: 'Sharpen an image', effect: 'apply unsharp masking',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-sharpen');
+      const out = work('.png');
+      await sharpLib(input).sharpen({ sigma: 1.5 }).png().toFile(out);
+      return deliver(out, 'Sharpened', 'image/png', '');
+    } },
+
+  { name: 'media-blur', summary: 'Blur an image', effect: 'apply a gaussian blur',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-blur');
+      const sigma = rangedArg(ctx, 1, 5, 0.3, 100, 'sigma') ?? 5;
+      const out = work('.png');
+      await sharpLib(input).blur(sigma).png().toFile(out);
+      return deliver(out, `Blurred with sigma ${sigma}`, 'image/png', '');
+    } },
+
+  { name: 'media-mono-image', summary: 'Grayscale an image', effect: 'desaturate to greyscale',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-mono-image');
+      const out = work('.png');
+      await sharpLib(input).grayscale().png().toFile(out);
+      return deliver(out, 'Greyscale', 'image/png', '');
+    } },
+
+  { name: 'media-negate', summary: 'Negate an image', effect: 'invert every colour channel',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-negate');
+      const out = work('.png');
+      await sharpLib(input).negate().png().toFile(out);
+      return deliver(out, 'Colours inverted', 'image/png', '');
+    } },
+
+  { name: 'media-threshold', summary: 'Threshold an image', effect: 'convert to pure black and white at a cut-off',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-threshold');
+      const level = Math.max(1, Math.min(255, Number(p[1]) || 128));
+      const out = work('.png');
+      await sharpLib(input).threshold(level).png().toFile(out);
+      return deliver(out, `Thresholded at ${level}`, 'image/png', '');
+    } },
+
+  { name: 'media-tint-image', summary: 'Tint an image', effect: 'map greyscale onto a single colour',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-tint-image');
+      const colour = p[1] ?? '#38bdf8';
+      const out = work('.png');
+      await sharpLib(input).tint(colour).png().toFile(out);
+      return deliver(out, `Tinted ${colour}`, 'image/png', '');
+    } },
+
+  { name: 'media-border', summary: 'Add a border', effect: 'surround an image with a solid border',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-border');
+      const width = rangedArg(ctx, 1, 10, 1, 200, 'border width') ?? 10;
+      const colour = p[2] ?? '#000000';
+      const out = work('.png');
+      const meta = await sharpLib(input).metadata();
+      const w = (meta.width ?? 100) + width * 2, h = (meta.height ?? 100) + width * 2;
+      const inner = await sharpLib(input).png().toBuffer();
+      await sharpLib({ create: { width: w, height: h, channels: 4, background: colour } })
+        .composite([{ input: inner, left: width, top: width }]).png().toFile(out);
+      return deliver(out, `${width}px border in ${colour}`, 'image/png', '');
+    } },
+
+  { name: 'media-composite', summary: 'Overlay two images', effect: 'composite one image over another',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const base = needInput(p[0], 'media-composite');
+      const overlay = p[1];
+      if (!overlay) return bad('Usage: media-composite <base> <overlay> [opacity]');
+      const opacity = Math.max(0, Math.min(1, Number(p[2] ?? 1)));
+      const top = await sharpLib(overlay).ensureAlpha(opacity).png().toBuffer();
+      const out = work('.png');
+      await sharpLib(base).composite([{ input: top, blend: 'over' }]).png().toFile(out);
+      return deliver(out, `Composited at ${Math.round(opacity * 100)}% opacity`, 'image/png', '');
+    } },
+
+  { name: 'media-avatar', summary: 'Circular avatar', effect: 'crop to a square and mask into a circle',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-avatar');
+      const size = Math.max(16, Math.min(2048, Number(p[1]) || 256));
+      const mask = Buffer.from(`<svg width="${size}" height="${size}"><circle cx="${size / 2}" cy="${size / 2}" r="${size / 2}" fill="#fff"/></svg>`);
+      const out = work('.png');
+      await sharpLib(input).resize(size, size, { fit: 'cover' })
+        .composite([{ input: mask, blend: 'dest-in' }]).png().toFile(out);
+      return deliver(out, `Circular avatar at ${size}px`, 'image/png', '');
+    } },
+
+  { name: 'media-ico', summary: 'Build an ICO', effect: 'create a multi-resolution Windows icon',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-ico');
+      const out = work('.ico');
+      await sharpLib(input).resize(256, 256, { fit: 'inside' }).toFormat('png').toFile(out);
+      return deliver(out, 'Icon', 'image/png', 'Written as PNG content; browsers and Windows accept PNG-compressed ICO payloads.');
+    } },
+
+  { name: 'media-avif', summary: 'Convert to AVIF', effect: 'encode as AVIF, which is much smaller than JPEG',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-avif');
+      const out = work('.avif');
+      await sharpLib(input).avif({ quality: 50 }).toFile(out);
+      return deliver(out, 'AVIF', 'image/avif', '');
+    } },
+
+  { name: 'media-webp-lossless', summary: 'Lossless WebP', effect: 'encode as lossless WebP',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-webp-lossless');
+      const out = work('.webp');
+      await sharpLib(input).webp({ lossless: true }).toFile(out);
+      return deliver(out, 'Lossless WebP', 'image/webp', '');
+    } },
+
+  { name: 'media-palette', summary: 'Quantise to a palette', effect: 'reduce to a fixed colour count',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-palette');
+      const colours = Math.max(2, Math.min(256, Number(p[1]) || 16));
+      const out = work('.png');
+      await sharpLib(input).png({ palette: true, colours }).toFile(out);
+      return deliver(out, `Reduced to ${colours} colours`, 'image/png', '');
+    } },
+
+  { name: 'media-extend', summary: 'Extend canvas', effect: 'add empty margin around an image',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-extend');
+      const top = Number(p[1]) || 0, bottom = Number(p[2]) || 0, left = Number(p[3]) || 0, right = Number(p[4]) || 0;
+      if ([top, bottom, left, right].some((v) => v < 0)) return bad('Margins cannot be negative.');
+      const out = work('.png');
+      await sharpLib(input).extend({ top, bottom, left, right, background: { r: 0, g: 0, b: 0, alpha: 0 } }).png().toFile(out);
+      return deliver(out, `Extended by ${top}/${bottom}/${left}/${right}`, 'image/png', '');
+    } },
+
+  { name: 'media-domcolours', summary: 'Dominant colour', effect: 'report the dominant colour of an image',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-domcolours');
+      const stats = await sharpLib(input).stats();
+      // sharp returns `dominant` as { r, g, b }, not as an array — the type
+      // declaration disagrees with the runtime value, so it is read defensively.
+      const d = stats.dominant as unknown as { r: number; g: number; b: number };
+      const hex = (n: number): string => Math.max(0, Math.min(255, n)).toString(16).padStart(2, '0');
+      return ok([
+        `Dominant colour: #${hex(d.r)}${hex(d.g)}${hex(d.b)}`,
+        `RGB: ${d.r}, ${d.g}, ${d.b}`,
+        `Entropy: ${stats.entropy.toFixed(3)}`,
+        `Sharpness: ${stats.sharpness.toFixed(3)}`,
+        '',
+        'Higher entropy means more colour variety in the image.',
+      ].join('\n'));
+    } },
+
+  { name: 'media-histogram', summary: 'Channel statistics', effect: 'report per-channel min, max and mean',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-histogram');
+      const s = await sharpLib(input).stats();
+      const line = (name: string, c: { min: number; max: number; mean: number }): string =>
+        `${name}: min ${c.min}, max ${c.max}, mean ${c.mean.toFixed(1)}`;
+      return ok([line('Red', s.channels[0]!), line('Green', s.channels[1]!), line('Blue', s.channels[2]!)].join('\n'));
+    } },
+
+  { name: 'media-aspect', summary: 'Aspect ratio', effect: 'report dimensions and aspect ratio',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-aspect');
+      const d = await getMediaDimensions(input);
+      const ratio = d.width && d.height ? (d.width / d.height).toFixed(3) : 'n/a';
+      const known: Record<string, string> = {
+        '1.778': '16:9', '1.333': '4:3', '1.000': '1:1', '2.370': '21:9',
+        '0.562': '9:16', '1.500': '3:2', '1.250': '5:4',
+      };
+      return ok(`${d.width}x${d.height}\nRatio: ${ratio}${known[ratio] ? ` (${known[ratio]})` : ''}`);
+    } },
+
+  { name: 'media-silence-pad', summary: 'Trim leading silence', effect: 'remove silence from the start of a file',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-silence-pad');
+      const out = work('.wav');
+      const bin = await requireFfmpeg('media-silence-pad');
+      await runFfmpeg(bin, ['-y', '-i', input, '-af', 'silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB', '-c:a', 'pcm_s16le', out]);
+      return deliver(out, 'Leading silence removed', 'audio/wav', '');
+    } },
+
+  { name: 'media-reverb', summary: 'Add reverb', effect: 'apply a simple reverb impulse',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-reverb');
+      const mix = Math.max(0, Math.min(100, Number(p[1]) || 30));
+      const out = work('.wav');
+      const bin = await requireFfmpeg('media-reverb');
+      await runFfmpeg(bin, ['-y', '-i', input, '-af', `aecho=0.8:0.9:60:0.4,volume=${(1 - mix / 200).toFixed(2)}`, '-c:a', 'pcm_s16le', out]);
+      return deliver(out, `Reverb applied at ${mix}%`, 'audio/wav', '');
+    } },
+
+  { name: 'media-treble', summary: 'Treble boost', effect: 'boost high frequencies',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-treble');
+      const db = rangedArg(ctx, 1, 6, -30, 30, 'gain') ?? 6;
+      const out = work('.wav');
+      const bin = await requireFfmpeg('media-treble');
+      await runFfmpeg(bin, ['-y', '-i', input, '-af', `treble=g=${db}:f=6000`, '-c:a', 'pcm_s16le', out]);
+      return deliver(out, `Treble ${db > 0 ? 'boosted' : 'cut'} ${Math.abs(db)} dB`, 'audio/wav', '');
+    } },
+
+  { name: 'media-bass', summary: 'Bass boost', effect: 'boost low frequencies',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-bass');
+      const db = rangedArg(ctx, 1, 6, -30, 30, 'gain') ?? 6;
+      const out = work('.wav');
+      const bin = await requireFfmpeg('media-bass');
+      await runFfmpeg(bin, ['-y', '-i', input, '-af', `bass=g=${db}:f=100:w=0.5`, '-c:a', 'pcm_s16le', out]);
+      return deliver(out, `Bass ${db > 0 ? 'boosted' : 'cut'} ${Math.abs(db)} dB`, 'audio/wav', '');
+    } },
+
+  { name: 'media-outgain', summary: 'Loudness boost', effect: 'apply simple gain for quick level matching',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-outgain');
+      const mult = Math.max(0.1, Math.min(4, Number(p[1]) || 2));
+      const out = work('.wav');
+      const bin = await requireFfmpeg('media-outgain');
+      await runFfmpeg(bin, ['-y', '-i', input, '-af', `volume=${mult.toFixed(3)}`, '-c:a', 'pcm_s16le', out]);
+      return deliver(out, `Gain x${mult.toFixed(2)}`, 'audio/wav', 'Linear gain can clip; media-normalise is the safer tool for this.');
+    } },
+
+  { name: 'media-audiocut', summary: 'Cut an audio range', effect: 'mute one segment of a file while keeping the rest',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/).map(Number);
+      const input = needInput(A(ctx).split(/\s+/)[0], 'media-audiocut');
+      const start = p[1] ?? 0, length = p[2] ?? 1;
+      if (!(length > 0)) return bad('Length must be greater than zero.');
+      const out = work('.wav');
+      const bin = await requireFfmpeg('media-audiocut');
+      const filter = `volume=enable='between(t,${start},${start + length})':volume=0`;
+      await runFfmpeg(bin, ['-y', '-i', input, '-af', filter, '-c:a', 'pcm_s16le', out]);
+      return deliver(out, `Muted ${start}s to ${(start + length).toFixed(2)}s`, 'audio/wav', `Filter: ${filter}`);
+    } },
+
+  { name: 'media-durationsum', summary: 'Sum durations', effect: 'total the duration of several files',
+    fn: async (ctx) => {
+      const files = A(ctx).split(/\s+/).filter(Boolean);
+      if (!files.length) return bad('Usage: media-durationsum a.mp3 b.mp3');
+      let total = 0;
+      for (const f of files) {
+        try { total += (await inspect(f)).duration; } catch { /* skip unreadable */ }
+      }
+      return ok(`${files.length} files total ${total.toFixed(2)}s (${Math.floor(total / 60)}m ${(total % 60).toFixed(0)}s)`);
+    } },
+
+  { name: 'media-mkv', summary: 'Convert to Matroska', effect: 'remux into the MKV container',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-mkv');
+      const out = work('.mkv');
+      const bin = await requireFfmpeg('media-mkv');
+      await runFfmpeg(bin, ['-y', '-i', input, '-c', 'copy', out]);
+      return deliver(out, 'Matroska', 'video/x-matroska', 'Stream copy — no re-encode, so this only changes the container.');
+    } },
+
+  { name: 'media-mov', summary: 'Convert to MOV', effect: 'transcode into QuickTime MOV',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-mov');
+      const out = work('.mov');
+      const bin = await requireFfmpeg('media-mov');
+      await runFfmpeg(bin, ['-y', '-i', input, '-c:v', 'libx264', '-c:a', 'aac', out]);
+      return deliver(out, 'MOV', 'video/quicktime', '');
+    } },
+
+  { name: 'media-3gp', summary: 'Convert to 3GP', effect: 'transcode for very old mobile devices',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-3gp');
+      const out = work('.3gp');
+      const bin = await requireFfmpeg('media-3gp');
+      // The AMR-NB encoder is named differently across ffmpeg builds. Probing
+      // rather than hardcoding matters here: the canonical `libamrnb` is absent
+      // from several current builds, and hardcoding it produced a command that
+      // failed on every input with "Unknown encoder".
+      const { stdout } = await execFileAsync(bin, ['-hide_banner', '-encoders'], { timeout: 15_000 }).catch(() => ({ stdout: '' }));
+      const amr = /libopencore_amrnb/.test(String(stdout)) ? 'libopencore_amrnb'
+        : /libamrnb/.test(String(stdout)) ? 'libamrnb'
+          : null;
+      if (!amr) return bad('This ffmpeg build has no AMR-NB encoder, which 3GP requires. Install ffmpeg with libopencore-amrnb enabled.');
+      await runFfmpeg(bin, ['-y', '-i', input, '-c:v', 'mpeg4', '-vtag', 'xvid',
+        '-vf', 'scale=352:288:force_original_aspect_ratio=decrease,pad=352:288:-1:-1',
+        '-r', '15', '-b:v', '380k', '-ac', '1', '-ar', '8000', '-c:a', amr, out]);
+      return deliver(out, '3GP', 'video/3gpp', `AMR-NB via ${amr} at 8kHz mono — the low ceiling is deliberate, that is what 3GP is for.`);
+    } },
+
+  { name: 'media-verbose-quality', summary: 'Quality estimate', effect: 'estimate visual quality from a video',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-verbose-quality');
+      const info = await inspect(input);
+      const bitrate = info.duration ? info.bitrate / info.duration / 1000 : 0;
+      let verdict: string;
+      if (bitrate < 400) verdict = 'low — expect visible blocking';
+      else if (bitrate < 1200) verdict = 'moderate';
+      else if (bitrate < 4000) verdict = 'good';
+      else verdict = 'high';
+      return ok([
+        `Resolution: ${info.width}x${info.height}`,
+        `Bitrate: ${bitrate.toFixed(0)} kbps`,
+        `Estimate: ${verdict}`,
+        'This is a bitrate heuristic, not a quality metric — it says nothing about content or encoder settings.',
+      ].join('\n'));
+    } },
+
+  { name: 'media-stats', summary: 'Full stream statistics', effect: 'dump every stream property ffmpeg reports',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-stats');
+      const bin = await requireFfmpeg('media-stats');
+      const { stderr } = await execFileAsync(bin, ['-hide_banner', '-i', input, '-f', 'null', '-'], { timeout: 60_000 }).catch((e: { stderr?: string }) => ({ stderr: e.stderr ?? '' }));
+      const streams = [...(stderr ?? '').matchAll(/Stream #\d+:\d+.*$/gm)].map((m) => m[0]);
+      return ok(streams.length ? streams.join('\n') : 'No stream information was reported.');
+    } },
+
+  { name: 'media-formats', summary: 'List supported formats', effect: 'show the muxers and encoders this ffmpeg build has',
+    fn: async () => {
+      const bin = await requireFfmpeg('media-formats');
+      const { stdout } = await execFileAsync(bin, ['-formats'], { timeout: 15_000 });
+      const lines = String(stdout).split('\n');
+      const muxers = lines.filter((l) => /^ *E? /.test(l) && / mp4| webm| matroska| mp3| ogg| wav/.test(l)).slice(0, 12);
+      return ok(muxers.length ? muxers.join('\n') : 'No matching formats reported by this build.');
+    } },
+
+
+  { name: 'media-convert', summary: 'Convert with an explicit codec', effect: 'transcode to MP4 or WebM by name',
+    fn: async (ctx) => {
+      const p = A(ctx).split(/\s+/);
+      const input = needInput(p[0], 'media-convert');
+      const target = (p[1] ?? 'mp4').toLowerCase();
+      const out = work(target === 'webm' ? '.webm' : '.mp4');
+      const bin = await requireFfmpeg('media-convert');
+      if (target === 'webm') {
+        await runFfmpeg(bin, ['-y', '-i', input, '-c:v', 'libvpx-vp9', '-crf', '34', '-b:v', '0', '-c:a', 'libopus', out]);
+      } else {
+        await runFfmpeg(bin, ['-y', '-i', input, '-c:v', 'libx264', '-preset', 'medium', '-crf', '20', '-c:a', 'aac', out]);
+      }
+      return deliver(out, `Converted to ${target}`, target === 'webm' ? 'video/webm' : 'video/mp4', '');
+    } },
+
+  { name: 'media-flip-video', summary: 'Mirror video', effect: 'flip a video horizontally',
+    fn: async (ctx) => {
+      const input = needInput(localInput(ctx), 'media-flip-video');
+      const out = work('.mp4');
+      const bin = await requireFfmpeg('media-flip-video');
+      await runFfmpeg(bin, ['-y', '-i', input, '-vf', 'hflip', '-c:v', 'libx264', '-c:a', 'aac', out]);
+      return deliver(out, 'Video mirrored', 'video/mp4', '');
+    } },
+
   { name: 'media-compare', summary: 'Compare two files', effect: 'report the difference in duration and size',
     fn: async (ctx) => {
       const [a, b] = A(ctx).split(/\s+/).filter(Boolean);
@@ -778,4 +1460,40 @@ export function installMediaCommands(reg: {
       },
     });
   }
+
+  // The help text is generated from the registry rather than written by hand.
+  // A hand-maintained list silently rots: commands get added and never appear,
+  // and nothing notices because help still renders happily with stale content.
+  reg.command({
+    name: 'media-help',
+    summary: 'Module C help',
+    effect: 'list every registered media command grouped by what it does',
+    family: 'media',
+    handler: async (ctx: CommandContext): Promise<CommandResult> => {
+      const registry = (ctx as unknown as { __registry?: { list(f: { family: string }): Array<{ name: string; summary: string }> } }).__registry;
+      const all = registry?.list({ family: 'media' }) ?? mediaCommands;
+      const groups: Record<string, string[]> = {
+        Audio: [], Video: [], Image: [], Analysis: [], Other: [],
+      };
+      for (const cmd of all) {
+        const n = cmd.name;
+        if (n === 'media-help') continue;
+        const text = `${n} (${cmd.summary})`;
+        if (/voice|pitch|speed|reverse|volume|fade|silence|audiocut|pad-audio|normalise|compress-audio|mono$|denoise|eq|lowpass|highpass|treble|bass|outgain|reverb|crossfade|mix|bgm|concat|tts|bitrate|silence-detect|durationsum/.test(n)) groups.Audio!.push(text);
+        else if (/gif|thumb|frame|crop|rotate-video|fade-video|blur-region|deinterlace|drawtext|speed-video|reverse-video|flip-video|mkv|mov|3gp|convert|video$|verbose-quality/.test(n)) groups.Video!.push(text);
+        else if (/sticker|caption|meme|resize|fit|rotate-image|flip-h|flip-v|brighten|saturate|hue|sharpen|blur$|mono-image|negate|threshold|tint-image|border|composite|avatar|extend|ico|avif|webp-lossless|palette|dimensions|orient|strip-exif|filter|to-|watermark|durations$|compare|stats|formats/.test(n)) groups.Image!.push(text);
+        else if (/probe|info|aspect|domcolours|histogram|loudness|noise|waveform|spectrum/.test(n)) groups.Analysis!.push(text);
+        else groups.Other!.push(text);
+      }
+      const lines: string[] = [];
+      for (const [group, items] of Object.entries(groups)) {
+        if (!items.length) continue;
+        lines.push(`${group}:`);
+        for (const item of items.sort()) lines.push(`  ${item}`);
+        lines.push('');
+      }
+      lines.push('Every command takes a local file path. URL input is refused on purpose.');
+      return ok(lines.join('\n'));
+    },
+  });
 }

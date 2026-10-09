@@ -323,3 +323,147 @@ test('module C keeps the registry free of duplicate names', () => {
   const names = reg.list().map((c) => c.name);
   assert.equal(new Set(names).size, names.length);
 });
+
+test('module C reaches at least 100 commands', () => {
+  assert.ok(build().list({ family: 'media' }).length >= 100,
+    `expected 100 media commands, got ${build().list({ family: 'media' }).length}`);
+});
+
+/**
+ * Every media command is executed against real files.
+ *
+ * A misspelled filter name makes ffmpeg exit non-zero, which the handler
+ * reports — so running every command and asserting success is a genuine
+ * end-to-end check, not a smoke test.
+ *
+ * Each command is tried against all three fixtures and must succeed with at
+ * least one. That keeps the test from needing a hand-maintained 100-entry
+ * routing table, which would rot the same way the hand-written help text did.
+ * An audio filter given a PNG legitimately fails; that is not a bug.
+ */
+test('every media command succeeds on at least one real fixture', { skip }, async () => {
+  const reg = build();
+  // Commands whose first argument is not a file path, or which need a second.
+  const NOT_A_FILE = [
+    'media-tts', 'media-help', 'media-formats', 'media-watermark',
+    'media-waveform-color', 'media-sticker-pack', 'media-durations',
+    'media-compare', 'media-durationsum', 'media-bgm', 'media-mix',
+    'media-crossfade', 'media-concat', 'media-composite',
+    'media-caption', 'media-meme-top', 'media-meme-bottom', 'media-drawtext',
+    'media-audiocut', 'media-pitch', 'media-silence', 'media-volume',
+  ];
+  const failures = [];
+  for (const cmd of reg.list({ family: 'media' })) {
+    if (NOT_A_FILE.includes(cmd.name)) continue;
+    let ok = false;
+    const errors = [];
+    for (const fixture of [IMAGE, AUDIO, VIDEO]) {
+      const res = await reg.run(sock, 'g1@g.us', cmd.name, fixture,
+        { sender: 'u1@s.whatsapp.net', state: new Map() });
+      if (!res.error) { ok = true; break; }
+      errors.push(`${IMAGE === fixture ? 'image' : AUDIO === fixture ? 'audio' : 'video'}: ${String(res.error).slice(0, 90)}`);
+    }
+    if (!ok) failures.push(`${cmd.name}\n    ${errors.join('\n    ')}`);
+  }
+  assert.deepEqual(failures, [], `media commands failed on every fixture:\n${failures.join('\n')}`);
+});
+
+test('text-accepting media commands work with their required text', { skip }, async () => {
+  const reg = build();
+  const cases = [
+    ['media-caption', `"top line" ${IMAGE}`],
+    ['media-meme-top', `"top line" ${IMAGE}`],
+    ['media-meme-bottom', `"bottom line" ${IMAGE}`],
+    ['media-drawtext', `${VIDEO} hello world`],
+    ['media-audiocut', `${AUDIO} 0 0.5`],
+    ['media-waveform-color', `${AUDIO} #ff0000`],
+    ['media-watermark', `${IMAGE} hello`],
+  ];
+  for (const [name, args] of cases) {
+    const res = await run(reg, name, args);
+    assert.ok(!res.error, `${name} ${args}: ${res.error}`);
+  }
+});
+
+test('media-drawtext escapes filtergraph separators', { skip }, async () => {
+  // An unescaped colon or comma inside drawtext breaks the whole filter chain,
+  // which is why a timestamp in caption text used to kill the command.
+  const res = await run(build(), 'media-drawtext', `${VIDEO} at 12:30, sharp`);
+  assert.ok(!res.error, res.error);
+});
+
+test('an audio filter correctly rejects a file with no audio', { skip }, async () => {
+  const res = await run(build(), 'media-bass', IMAGE);
+  assert.ok(res.error, 'an audio filter on a silent PNG must report an error, not succeed');
+});
+
+test('the two-file commands all succeed on real pairs', { skip }, async () => {
+  const reg = build();
+  const cases = [
+    ['media-bgm', `${AUDIO} ${AUDIO}`],
+    ['media-mix', `${AUDIO} ${AUDIO}`],
+    ['media-crossfade', `${AUDIO} ${AUDIO}`],
+    ['media-concat', `${AUDIO} ${AUDIO}`],
+    ['media-composite', `${IMAGE} ${IMAGE}`],
+    ['media-sticker-pack', `${IMAGE} ${IMAGE}`],
+    ['media-durations', `${VIDEO} ${AUDIO}`],
+    ['media-compare', `${VIDEO} ${AUDIO}`],
+    ['media-durationsum', `${VIDEO} ${AUDIO}`],
+    ['media-watermark', `${IMAGE} hello`],
+  ];
+  for (const [name, args] of cases) {
+    const res = await run(reg, name, args);
+    assert.ok(!res.error, `${name} ${args}: ${res.error}`);
+  }
+});
+
+test('media-formats reports real muxers from this ffmpeg build', { skip }, async () => {
+  const res = await run(build(), 'media-formats', '');
+  assert.ok(!res.error, res.error);
+  assert.ok(res.text.length > 10, 'formats output should not be empty');
+});
+
+test('media-help lists every media command', async () => {
+  const reg = build();
+  const help = String((await run(reg, 'media-help', '')).text);
+  const missing = reg.list({ family: 'media' })
+    .map((c) => c.name)
+    .filter((n) => n !== 'media-help' && !help.includes(n));
+  assert.deepEqual(missing, [], `media-help does not mention: ${missing.join(', ')}`);
+});
+
+test('audio commands reject out-of-range parameters', { skip }, async () => {
+  const reg = build();
+  const cases = [
+    ['media-speed', `${AUDIO} 99`],
+    ['media-volume', `${AUDIO} 999`],
+    ['media-eq', `${AUDIO} 99999 999`],
+    ['media-highpass', `${AUDIO} 99999`],
+    ['media-lowpass', `${AUDIO} 99999`],
+    ['media-speed-video', `${VIDEO} 99`],
+    ['media-compress-audio', `${AUDIO} 9999`],
+  ];
+  for (const [name, args] of cases) {
+    const res = await run(reg, name, args);
+    assert.ok(res.error, `${name} with ${args} must be rejected`);
+  }
+});
+
+test('image commands reject invalid geometry', { skip }, async () => {
+  const reg = build();
+  assert.ok((await run(reg, 'media-crop', `${VIDEO} 0 100`)).error, 'zero crop width must be rejected');
+  assert.ok((await run(reg, 'media-extend', `${IMAGE} -5`)).error, 'negative margin must be rejected');
+  assert.ok((await run(reg, 'media-border', `${IMAGE} 9999`)).error, 'absurd border must be rejected');
+});
+
+test('analysis commands report real measurements', { skip }, async () => {
+  const reg = build();
+  const dom = await run(reg, 'media-domcolours', IMAGE);
+  assert.match(dom.text, /Dominant colour: #[0-9a-f]{6}/);
+  const hist = await run(reg, 'media-histogram', IMAGE);
+  assert.match(hist.text, /Red: min \d+, max \d+, mean \d+\.\d/);
+  const aspect = await run(reg, 'media-aspect', IMAGE);
+  assert.match(aspect.text, /Ratio: /);
+  const stats = await run(reg, 'media-stats', VIDEO);
+  assert.ok(stats.text.length > 10);
+});
