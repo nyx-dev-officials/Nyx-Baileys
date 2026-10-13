@@ -28,6 +28,7 @@ import { DisconnectReason } from '@whiskeysockets/baileys';
 
 import { createFormFlow, infoRow, radioRow } from '../core/nodes.js';
 import { renderIntro, codeFrame } from './intro.js';
+import { renderTerminalQr } from './qr-display.js';
 import { moderation } from '../plugins/moderation.js';
 import { welcome } from '../plugins/welcome.js';
 import { FileSessionStore } from '../core/session-store.js';
@@ -334,7 +335,7 @@ async function measureDir(dir: string, maxEntries = 20_000): Promise<{ files: nu
   return { files, bytes };
 }
 
-async function readSession(dir: string, name?: string): Promise<SessionRecord> {
+export async function readSession(dir: string, name?: string): Promise<SessionRecord> {
   const absolute = resolvePath(dir);
   let exists = true;
   let modified = 0;
@@ -511,12 +512,16 @@ function waitForReady(
 
     offUpdate = client.on('connection.update', (update: ConnectionUpdate) => {
       if (update.qr) {
-        // Only announce a ref that is actually new. The QR rotates every ~20s and
-        // `cmdPair` holds its own capture listener, so an unconditional announce
-        // here would reprint a ref the operator has already read.
+        // Only render a ref that is actually new. The QR rotates every ~20s and
+        // The pairing path holds its own capture listener, so an unconditional render
+        // here would reprint a symbol the operator has already scanned — which
+        // is exactly the wall of near-identical output this replaces.
         if (update.qr !== pairing.qr) {
           pairing.qr = update.qr;
-          announcePairing(io, pairing);
+          // The phone code is the reliable path on a headless box, so it is
+          // shown first and the QR is the alternative for someone scanning
+          // from the same screen.
+          if (!pairing.code) renderTerminalQr(io, update.qr);
         }
       }
       if (update.connection === 'open' || update.qr) settle(true);
@@ -609,29 +614,6 @@ async function sendText(client: NyxBaileys, target: string, text: string): Promi
 
 /* ── command: pair ────────────────────────────────────────────────── */
 
-const pairSpec: CommandSpec = {
-  name: 'pair',
-  summary: 'Pair a number by QR scan, or by typing an 8-character phone code.',
-  positionals: [],
-  flags: [
-    { name: 'phone', kind: 'string', placeholder: '<number>', describe: 'Number to send the pairing code to, in international form' },
-    { name: 'reset', kind: 'boolean', describe: 'Clear a half-finished pairing in the session directory before pairing' },
-    { name: 'timeout', kind: 'number', default: 180, placeholder: '<seconds>', describe: 'How long to wait for the pairing to complete' },
-    { name: 'connect-timeout', kind: 'number', default: 60, placeholder: '<seconds>', describe: 'How long to wait for the socket to open' },
-  ],
-  examples: [
-    'nyx-baileys pair --phone 6283831459585',
-    'nyx-baileys pair',
-    'nyx-baileys pair --dir ./session --timeout 300',
-    'nyx-baileys pair --dir ./session --reset',
-  ],
-  notes: [
-    'WhatsApp → Linked devices → Link a device, then type the code or scan the QR.',
-    'rc14 removed terminal QR rendering, so --phone is the only path that works without a camera. The QR ref is still printed when --phone is absent.',
-    'A pairing code expires in roughly 30 seconds — have the phone open before requesting one.',
-    'Already paired? This command says so and changes nothing. To pair a different number, run `sessions remove` first.',
-  ],
-};
 
 /** `+62 838-3145-9585` → `6283831459585`. WhatsApp wants digits, in international form. */
 export function normalisePhone(raw: string): string {
@@ -710,237 +692,34 @@ async function ask(question: string, fallback: string): Promise<string> {
   }
 }
 
-async function cmdPair(ctx: CommandContext): Promise<ExitCode> {
-  const { args, io } = ctx;
-  const pairTimeout = flagNumber(args, 'timeout', 180) * 1000;
-  const connectTimeout = flagNumber(args, 'connect-timeout', 60) * 1000;
-  let phone = flagString(args, 'phone', '').trim();
-
-  const interactive = process.stdin.isTTY === true && !io.json;
-  const wantsHelp = flagBool(args, 'help-intro', false);
-
-  /**
-   * Phone validation runs first, before any session or socket work.
-   *
-   * A malformed number is a pure argument error. If the session check ran
-   * first, `--phone 123` pointed at a poisoned directory would report a
-   * half-finished pairing rather than the obvious typo, and pointing it at a
-   * live one would cost a connection attempt that WhatsApp counts.
-   */
-  let digits = '';
-  if (phone) {
-    digits = normalisePhone(phone);
-    if (digits.length < 8) {
-      throw new UsageError(
-        `--phone needs a full international number, got \`${phone}\``,
-        'for example: npm run pair -- --phone 6283831459585',
-      );
-    }
-  }
-
-  /**
-   * Session state is checked before the introduction is shown.
-   *
-   * Showing a full-screen banner and then refusing to pair is worse than either
-   * alone: the operator reads a welcome, types nothing, and gets an error about
-   * a half-finished pairing they never knew about. A command that is going to
-   * refuse should say so first and stay quiet.
-   */
-  const pre = await readSession(ctx.env.sessionDir);
-
-  if (!phone && !wantsHelp && pre.registered && interactive) {
-    // Only a genuine interactive run gets the offer of another directory. In
-    // every other case the normal "already paired" report below is correct.
-    printIntroduction(io, ctx);
-    io.line();
-    io.warn(`${ctx.env.sessionDir} already holds ${pre.jid ?? 'another number'}.`);
-    io.line('A second number needs its own directory, or it overwrites the first.');
-    io.line();
-    const suggested = `${ctx.env.sessionDir.replace(/[\\/]+$/, '')}-2`;
-    const chosen = await ask('Session directory for the new number', suggested);
-    if (!chosen) {
-      io.line();
-      io.line('Nothing changed.');
-      io.emit('pair', { paired: true, alreadyPaired: true, number: pre.jid, dir: pre.path });
-      return EXIT.ok;
-    }
-    ctx.env.sessionDir = chosen;
-  }
-
-  const existing = await readSession(ctx.env.sessionDir);
-  if (existing.registered) {
-    io.status(true, `already paired as ${existing.jid ?? 'unknown number'} (${existing.path})`);
-    io.line();
-    io.line('To pair a different number: nyx-baileys sessions remove');
-    io.emit('pair', { paired: true, alreadyPaired: true, number: existing.jid, dir: existing.path });
-    return EXIT.ok;
-  }
-
-  // Caught before connecting, because the alternative is three identical silent
-  // 401s and a diagnosis that points at auth instead of at the file on disk.
-  if (existing.partial.length > 0) {
-    if (!flagBool(args, 'reset', false)) {
-      throw new CliError(
-        EXIT.notPaired,
-        `${existing.path} holds a half-finished pairing (${existing.partial.join(', ')}) that cannot be resumed`,
-        `run \`nyx-baileys pair --dir ${existing.path} --reset\` to clear it and pair again`,
-      );
-    }
-    io.warn(`clearing the half-finished pairing in ${existing.path} (--reset)`);
-    await new FileSessionStore({ dir: existing.path }).clear();
-  }
-
-  // Everything below this point is going to open a socket, so now — and only
-  // now — is the right moment for the introduction and the prompt.
-  if (!phone && !wantsHelp) {
-    printIntroduction(io, ctx);
-    if (!interactive) {
-      io.line();
-      io.line('Not a terminal, so there is nothing to prompt on. Pass the number:');
-      io.line('  npm run pair -- --phone 628XXXXXXXXX');
-      io.emit('pair', { paired: false, reason: 'no-phone', interactive: false });
-      return EXIT.usage;
-    }
-    const answer = await ask('WhatsApp number — country code, digits only', '');
-    phone = answer;
-    if (!phone) {
-      io.line();
-      io.line('Nothing entered, so nothing was changed.');
-      io.emit('pair', { paired: false, reason: 'cancelled', interactive: true });
-      return EXIT.ok;
-    }
-  }
-
-
-  io.line(`Session directory: ${existing.path}`);
-  io.line('Opening the socket…');
-  io.line();
-
-  const client = createNyxBaileys({
-    sessionDir: ctx.env.sessionDir,
-    logLevel: ctx.env.logLevel,
-    printQRInTerminal: true,
-  });
-  ctx.lifecycle.add(async () => {
-    await client.dispose();
-  });
-
-  try {
-    await client.connect();
-  } catch (err) {
-    const diagnosis = diagnoseConnectError(err);
-    throw new CliError(EXIT.failure, diagnosis.message, diagnosis.next);
-  }
-
-  const sock = client.sock;
-
-  // Capture every rotation: only the newest ref is valid. The handler no longer
-  // announces on every update — a rotating QR would otherwise reprint the same
-  // code on each frame.
-  const pairing: Pairing = { qr: null, code: null };
-  ctx.lifecycle.add(
-    client.on('connection.update', (update: ConnectionUpdate) => {
-      if (update.pairingCode && update.pairingCode !== pairing.code) {
-        pairing.code = update.pairingCode;
-        announcePairing(io, pairing);
-      }
-      if (update.qr && update.qr !== pairing.qr) {
-        pairing.qr = update.qr;
-        announcePairing(io, pairing);
-      }
-    }),
-  );
-
-  if (!sock.authState.creds.registered) {
-    // `connect()` resolves once the plugins are applied, which is before the
-    // socket is open. `requestPairingCode` against a socket that has not
-    // finished its handshake throws Boom 428 'Connection Closed', so readiness
-    // is awaited first — and only when a code is actually needed. The QR path
-    // does not need it, and waiting there would turn a working scan into a
-    // timeout.
-    if (phone) {
-      const ready = await waitForReady(client, connectTimeout, pairing, io);
-      if (!ready) {
-        throw new CliError(
-          EXIT.failure,
-          `the socket was not ready within ${formatDuration(connectTimeout)} (state: ${client.connectionState.state})`,
-          'retry; WhatsApp may be rate limiting this number',
-        );
-      }
-      await requestPhoneCode(io, sock, digits);
-    } else {
-      io.line('Scan in WhatsApp → Linked devices → Link a device.');
-      io.line('No --phone given, so this waits for a QR scan. Pass --phone <number> for a code to type in.');
-      io.line();
-    }
-
-    const result = await waitForPairing(client, pairTimeout, pairing, io);
-    if (!result.ok) {
-      const code = pairing.code ? ` Phone code: ${formatPairingCode(pairing.code)}.` : '';
-      if (result.reason === 'unregistered') {
-        throw new CliError(
-          EXIT.notPaired,
-          `WhatsApp closed the connection (401) while the session in ${existing.path} was still unregistered`,
-          `the file on disk is now half-negotiated; run \`nyx-baileys pair --dir ${existing.path} --reset\` and pair again`,
-        );
-      }
-      throw new CliError(
-        EXIT.notPaired,
-        result.reason === 'timeout'
-          ? `pairing did not complete within ${formatDuration(pairTimeout)}.${code}`
-          : `the socket closed before pairing completed.${code}`,
-        'run `nyx-baileys pair` again and finish inside the window',
-      );
-    }
-  }
-
-  const open = await waitForOpen(client, connectTimeout);
-  if (!open) {
-    throw new CliError(
-      EXIT.failure,
-      `paired, but the socket did not open within ${formatDuration(connectTimeout)}`,
-      'the pairing is saved — run `nyx-baileys status` to check it',
-    );
-  }
-
-  // Correct the flag rc14 never sets, now that we know the pairing worked.
-  // dispose() first so Baileys is not mid-write on the file — it is idempotent,
-  // so the shared lifecycle running it again afterwards is harmless.
-  await client.dispose();
-  const healed = await healRegisteredFlag(ctx.env.sessionDir);
-  if (healed.healed && !io.json) {
-    io.note(`corrected the \`registered\` flag on disk for ${healed.jid ?? 'this session'}`);
-  }
-
-  const number = sock.user?.id ?? null;
-  io.status(true, `paired${number ? ` as ${number}` : ''}`);
-  io.line();
-  io.fields([
-    ['number', number ?? 'unknown'],
-    ['session', existing.path],
-    ['plugins', String(client.applied.length)],
-    ['patches', String(client.patchCount)],
-  ]);
-  io.emit('pair', {
-    paired: true,
-    alreadyPaired: false,
-    number,
-    dir: existing.path,
-    plugins: [...client.applied],
-    patchCount: client.patchCount,
-  });
-  return EXIT.ok;
-}
 
 interface Pairing {
   qr: string | null;
   code: string | null;
 }
 
+/**
+ * Render a WhatsApp QR ref as a scannable symbol.
+ *
+ * rc14 removed terminal QR rendering — `printQRInTerminal` is deprecated and
+ * does nothing, which is why this command used to print a bare
+ * `https://wa.me/settings/linked_devices#...` URL over and over instead of a
+ * code anyone could scan.
+ *
+ * The ref string is encoded with the project's own QR encoder and drawn with
+ * half-block characters. Half blocks matter: a terminal cell is about twice as
+ * tall as it is wide, so one character per module renders the symbol as a
+ * rectangle twice the height it should be, and phone cameras reject it.
+ *
+ * Nothing is printed when `NO_COLOR` is set or the stream is not a TTY, because
+ * a QR that cannot be scanned is worse than one line of text saying so.
+ */
 function announcePairing(io: Reporter, pairing: Pairing): void {
   const rows: (readonly [string, string])[] = [];
   if (pairing.code) rows.push(['phone code', formatPairingCode(pairing.code)]);
-  if (pairing.qr) rows.push(['qr ref', pairing.qr]);
+  // The ref is a data string, not something a person can use. It is rendered as
+  // a scannable symbol instead, and only when it is genuinely new.
+
   if (rows.length === 0) return;
   io.pairing(rows);
   io.line();
@@ -1907,7 +1686,6 @@ async function openSocketClient(
  * order of `--help`.
  */
 export const COMMANDS: Readonly<Record<string, { spec: CommandSpec; run: Command }>> = {
-  pair: { spec: pairSpec, run: cmdPair },
   status: { spec: statusSpec, run: cmdStatus },
   send: { spec: sendSpec, run: cmdSend },
   form: { spec: formSpec, run: cmdForm },

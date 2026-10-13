@@ -23,7 +23,7 @@ import { mkdirSync, readFileSync, writeFileSync, renameSync, existsSync } from '
 import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 
-import { Memory, type FactCandidate, type MemoryFact } from './context.js';
+import { Memory, type ChatMessage, type ChatRole, type FactCandidate, type MemoryFact } from './context.js';
 import { baseJid } from '../ops-50/types.js';
 
 /* ════════════════════════════════════════════════════════════════════════
@@ -66,11 +66,18 @@ interface PersistedMemory {
   facts: PersistedFact[];
 }
 
+interface PersistedTranscript {
+  version: 1;
+  messages: Array<{ role: ChatRole; content: string; at?: number; from?: string; tool?: string }>;
+}
+
 export interface DurableOptions {
   /** Directory for the JSON files. Created if missing. */
   dir: string;
   /** Facts per user. Default 300. */
   capacity?: number;
+  /** Transcript messages kept per chat. Default 200. */
+  transcriptLimit?: number;
 }
 
 /**
@@ -90,6 +97,77 @@ export class DurableMemory {
 
   private path(key: string): string {
     return join(this.options.dir, `${key}.json`);
+  }
+
+  /* ── transcripts ─────────────────────────────────────────────── */
+
+  private transcriptPath(key: string): string {
+    return join(this.options.dir, `${key}.chat.json`);
+  }
+
+  /**
+   * Load a chat's persisted transcript, or `[]` when none exists.
+   *
+   * Facts alone were not enough to carry a conversation across an un-pairing:
+   * the bot remembered what you told it and forgot everything it had said back.
+   * A corrupt file is quarantined, never deleted, for the same reason as facts.
+   */
+  transcript(key: string): ChatMessage[] {
+    const file = this.transcriptPath(key);
+    if (!existsSync(file)) return [];
+
+    try {
+      const parsed = JSON.parse(readFileSync(file, 'utf8')) as PersistedTranscript;
+      if (parsed?.version !== 1 || !Array.isArray(parsed.messages)) return [];
+
+      return parsed.messages
+        .filter((m) => (m.role === 'user' || m.role === 'assistant' || m.role === 'system')
+          && typeof m.content === 'string')
+        .map((m) => ({
+          role: m.role as ChatRole,
+          content: m.content,
+          ...(m.at !== undefined ? { at: m.at } : {}),
+          ...(m.from !== undefined ? { from: m.from } : {}),
+          ...(m.tool !== undefined ? { tool: m.tool } : {}),
+        }));
+    } catch {
+      try { renameSync(file, `${file}.corrupt`); } catch { /* nothing more we can do */ }
+      return [];
+    }
+  }
+
+  /**
+   * Persist a chat's transcript, atomically and bounded.
+   *
+   * Only string-bodied messages are written: a `ContentPart[]` is a vision turn
+   * whose pixel payload is neither useful to reload nor safe to grow on disk.
+   */
+  saveTranscript(key: string, messages: readonly ChatMessage[]): void {
+    const limit = this.options.transcriptLimit ?? 200;
+    const kept = messages
+      .filter((m) => typeof m.content === 'string')
+      .slice(-limit)
+      .map((m) => ({
+        role: m.role,
+        content: m.content as string,
+        ...(m.at !== undefined ? { at: m.at } : {}),
+        ...(m.from !== undefined ? { from: m.from } : {}),
+        ...(m.tool !== undefined ? { tool: m.tool } : {}),
+      }));
+
+    const payload: PersistedTranscript = { version: 1, messages: kept };
+    const file = this.transcriptPath(key);
+    const temp = `${file}.tmp`;
+
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(temp, JSON.stringify(payload), 'utf8');
+    renameSync(temp, file);
+  }
+
+  /** Drop a stored transcript, on disk and from cache. */
+  purgeTranscript(key: string): void {
+    try { renameSync(this.transcriptPath(key), `${this.transcriptPath(key)}.purged`); }
+    catch { /* nothing stored */ }
   }
 
   /** Load, or return an empty store. A corrupt file is quarantined, not fatal. */
@@ -306,6 +384,23 @@ export class ScopedMemory {
   /** End a session, dropping its layer. Durable memory is untouched. */
   endSession(sessionId: string): number {
     return this.forgetSession(sessionId);
+  }
+
+  /* ── transcripts ─────────────────────────────────────────────── */
+
+  /** Persist a chat's transcript under the durable user key. */
+  saveTranscript(jid: string, sessionId: string, messages: readonly ChatMessage[]): void {
+    this.options.durable.saveTranscript(`${userKey(jid)}_${sessionId}`, messages);
+  }
+
+  /** Load a chat's persisted transcript, or `[]` when none exists. */
+  transcript(jid: string, sessionId: string): ChatMessage[] {
+    return this.options.durable.transcript(`${userKey(jid)}_${sessionId}`);
+  }
+
+  /** Drop a chat's persisted transcript. */
+  purgeTranscript(jid: string, sessionId: string): void {
+    this.options.durable.purgeTranscript(`${userKey(jid)}_${sessionId}`);
   }
 
   /** How many sessions are live. */

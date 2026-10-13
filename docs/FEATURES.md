@@ -105,7 +105,7 @@ re-proposes them.
 | 32 | `createTableFlow()` | `core` | A read-only data sheet that renders as a native table rather than monospace text. `core/nodes.ts:185-208` |
 | 33 | `carouselCardWithMedia()` | `core` | A carousel card that flags `hasMediaAttachment` for caller-supplied media. `core/nodes.ts:214-243` |
 | 34 | `createAlbumContainer()` | `core` | Emits the album **parent**: counts only, no media array, because that is what rc14 sends. `core/nodes.ts:251-260` |
-| 35 | `createEdit()` | `core` | `[defect]` Emits `{editedMessage:{text}}`, but rc14's `editedMessage` is a `FutureProofMessage` wrapping a `Message`. The text is silently lost on the wire; the `as` cast hides it. `core/nodes.ts:263-265` — see `ARCHITECTURE.md` §5.6 |
+| 35 | `createEdit()` | `core` | `[ok]` Returns `{ text, edit: targetKey }`; rc14 assembles the `protocolMessage` itself at `Utils/messages.js:514`. The old `{editedMessage:{text}}` form encoded to 15 bytes with no text and named nothing to edit — fixed in `0ece183`, pinned by three regression tests. `core/nodes.ts:293` — see `ARCHITECTURE.md` §5.6 |
 
 ## core / session stores (6)
 
@@ -447,16 +447,16 @@ coverage matrix — 8 PARTIAL and 1 MISSING at the time of that review.
 
 | # | Name | Layer | Design decision that matters | Effort |
 |---|---|---|---|---|
-| 191 | `patch()` stash merge | `core` | The stash is created once and holds only the first patched name, so `undo()` on a second method assigns `undefined`. Merge into the existing stash object instead of only creating it. One line; unblocks correct teardown and `patchAll`. | S |
-| 192 | `patchAll()` return shape | `core` | Returns `[aggregate, ...applied.slice(1)]`, dropping `applied[0]` while the aggregate supersedes everything. Return the aggregate alone, or return `applied` unmodified. | S |
-| 193 | `createEdit()` wire shape | `core` | `editedMessage` is `FutureProofMessage { Message message = 1 }`. Build `{editedMessage:{message:{conversation:text}}}`; drop the `as` cast so the compiler enforces it. | S |
-| 194 | Media GC refcount | `plugins` | Current eviction removes the blobs holding bytes and skips empty ones — the inverse of its comment. Add a real refcount, or drop the guard and fix the comment to match the code. | S |
+| 191 | `patch()` stash merge | `core` | **DONE.** The stash merges each method's original into the existing object (`intercept.ts:57-65`), so `undo()` on a second method restores it instead of assigning `undefined`. | S |
+| 192 | `patchAll()` return shape | `core` | **DONE.** The array is exactly the methods that applied, and undo-everything is `undoAll()` rather than a fake first element. Absent methods no longer occupy a slot. | S |
+| 193 | `createEdit()` wire shape | `core` | **DONE.** Returns `{ text, edit: targetKey }`; see entry 35. | S |
+| 194 | Media GC refcount | `plugins` | **DONE.** `acquire`/`release` pin a blob while a reader holds it, and the sweep skips `refs > 1` while still counting it toward the ceiling (`memory.ts:130`, `:210-229`). | S |
 | 195 | True streaming download | `plugins` | `streamTo` materialises the whole buffer then slices. Use `downloadMediaMessage(msg,'stream',…)`, which rc14 exports and types; peak becomes one chunk. | M |
-| 196 | `goto()` re-entrancy guard | `plugins` | `goto` into a step that ended or TTL-expired is a silent no-op, and the warning only fires on a missing *name*. Check `active.has(jid)` before dispatch. | S |
+| 196 | `goto()` re-entrancy guard | `plugins` | **DONE.** `goto` checks the flow is still active and warns before dispatching, so an ended or TTL-expired flow is visible rather than silent (`flow.ts:199-203`). | S |
 | 197 | Privilege-climb denominator | `plugins` | `known` counts promotes, so the check is a tautology. Divide observed admins by a group-metadata participant count and require ≥ 0.8. Needs a metadata cache first (#214). | M |
 | 198 | Album completion race | `plugins` | **DONE.** `Album.expected` is `number \| null`; a sibling-created album reports `null` until the parent lands, and `settle()` re-evaluates completion when the real count arrives. The `MAX_SAFE_INTEGER` sentinel is gone from the data model. `plugins/album.ts:41`, `:100-115` | S |
-| 199 | Warm-up on an interval | `plugins` | The ramp is computed once per socket build, so a long-lived process holds its day-one multiplier forever. Re-evaluate hourly with a disposer-cleared interval. | S |
-| 200 | Demo listener cleanup | `plugins` | `main()` adds a second `connection.update` listener that calls `dispose()`, which will also fire during a rebuild now that `reconnect` is in the chain. Move it behind `onConnection()`. | S |
+| 199 | Warm-up on an interval | `plugins` | **DONE.** Re-evaluated hourly with a disposer-cleared interval, so a long-lived socket eases toward 1× (`warmup.ts:60-64`). | S |
+| 200 | Demo listener cleanup | `plugins` | **DONE.** The demo no longer registers its own `connection.update` listener (`src/index.ts:474`), so a rebuild cannot trigger a spurious `dispose()`. | S |
 
 ## Native flow: the real button vocabulary (11)
 

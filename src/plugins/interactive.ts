@@ -42,25 +42,37 @@ import type { CoreSocket, Plugin } from '../utils/types.js';
  *    Adding a random 32-byte secret changed nothing. It is kept below because
  *    the server expects the field, not because it fixes delivery.
  *
- * ## What is actually required: the `biz` / `bot` stanza nodes
+ * ## What is actually required: the `biz` node, with a fixed flow name
  *
  * WhatsApp renders interactive elements from nodes that ride alongside the
  * protobuf message, not from the protobuf itself. `relayMessage` accepts them as
- * `additionalNodes` (`Socket/messages-send.js:1133`), and without them the
+ * `additionalNodes` (`Socket/messages-send.js:491`), and without them the
  * message is silently discarded:
  *
  * ```
  * biz
  * └─ interactive  type=native_flow v=1
- *    └─ native_flow  name=<flow name>
+ *    └─ native_flow  v=9 name=mixed
  * ```
  *
- * 1:1 chats additionally need `bot biz_bot=1`, or consumer clients will not
- * render the flow. Both were confirmed working on a physical phone: a
- * `quick_reply` flow rendered with tappable buttons and its reply came back.
+ * 1:1 chats also get `bot biz_bot=1` here. That node is additive rather than
+ * load-bearing: the fork attaches it only to content carrying an `ai` key, so it
+ * marks an AI/bot chat rather than enabling rendering.
  *
- * The `native_flow` `name` must match the button actually sent — `quick_reply`,
- * `single_select`, `cta_url` and so on. A mismatch renders nothing.
+ * The `native_flow` `name` does **not** match the button actually sent — `quick_reply`,
+ * `single_select`, `cta_url` and so on. It is the fixed literal `mixed`, with
+ * `v` = `9`, for every interactive send.
+ *
+ * This file previously asserted the opposite, with tests: that the name had to
+ * be the flow, and that a mismatch renders nothing. That is why every
+ * interactive message sent from this library arrived without its button on a
+ * real phone on 2026-10-09, and why the tests were green throughout. The shape
+ * above is not inferred — it is read out of `atexovi-baileys@7.5.6-rc.6`, the
+ * fork pinned by `refs/atex-ovi__wabase-button`, whose `relayMessage` hardcodes
+ * `{ v: '9', name: 'mixed' }` for every `interactiveMessage`, `buttonsMessage`
+ * and `listMessage` it sends, whatever button those carry. That fork injects no
+ * `additionalNodes` from user code at all: the node is built inside
+ * `relayMessage`, which is why the reference bot never mentions it.
  *
  * ## Why order 66
  *
@@ -91,6 +103,28 @@ import type { CoreSocket, Plugin } from '../utils/types.js';
 
 /** Content keys the upstream chain rejects but WhatsApp clients can render. */
 const INTERACTIVE_KEYS = [
+  /**
+   * The reference API's content key (`refs/atex-ovi__wabase-button`):
+   *
+   * ```js
+   * await sock.sendMessage(jid, {
+   *   text: 'Hello!',
+   *   subtitle: 'All Button Showcase',
+   *   footer: '© … — MIT License',
+   *   interactiveButtons: [
+   *     { name: 'single_select', buttonParamsJson: JSON.stringify({ … }) },
+   *   ],
+   * });
+   * ```
+   *
+   * It is `sendMessage`-shaped rather than `generateWAMessageFromContent`-shaped,
+   * which is why it belongs in this list: the caller keeps the ordinary send
+   * ergonomics and the plugin does the translation. Note the `name` on each
+   * button is the flow name, and the `native_flow` stanza node must carry that
+   * same name or the client renders nothing — see `interactiveFlowName`, which
+   * now reads it off the payload instead of assuming `quick_reply`.
+   */
+  'interactiveButtons',
   'listMessage',
   'buttonsMessage',
   'templateMessage',
@@ -103,15 +137,42 @@ const INTERACTIVE_KEYS = [
   'interactiveResponseMessage',
 ] as const;
 
-/** Flow names WhatsApp accepts on a `native_flow` node. */
-export type NativeFlowName =
-  | 'quick_reply'
-  | 'single_select'
-  | 'cta_url'
-  | 'cta_call'
-  | 'cta_copy'
-  | 'payment'
-  | 'location_request';
+/**
+ * Flow names WhatsApp accepts on a `native_flow` node.
+ *
+ * A runtime array, not just a type. A hand-written union erases at compile time,
+ * so anything that needs to *check* a flow name at runtime has to restate the
+ * list and hope it stays in sync — which is exactly how the feature menu ended up
+ * duplicating it. Deriving the type from the array means there is one list, and a
+ * new flow is available to every consumer the moment it is added here.
+ */
+export const NATIVE_FLOW_NAMES = [
+  'quick_reply',
+  'single_select',
+  'cta_url',
+  'cta_call',
+  'cta_copy',
+  'payment',
+  'location_request',
+] as const;
+
+export type NativeFlowName = (typeof NATIVE_FLOW_NAMES)[number];
+
+/**
+ * The `native_flow` node's two attributes.
+ *
+ * Both are fixed values taken from the reference implementation's
+ * `relayMessage`, and neither is derived from the button being sent — see the
+ * file header. They live here as named constants so no future change can
+ * "helpfully" substitute a flow name again.
+ */
+export const NATIVE_FLOW_STANZA_NAME = 'mixed';
+export const NATIVE_FLOW_STANZA_VERSION = '9';
+
+/** True when `name` is a flow WhatsApp renders. */
+export function isNativeFlowName(name: string): name is NativeFlowName {
+  return (NATIVE_FLOW_NAMES as readonly string[]).includes(name);
+}
 
 export interface InteractiveRow {
   title: string;
@@ -170,25 +231,45 @@ export function interactiveKeyOf(content: unknown): string | null {
 }
 
 /**
- * The flow name implied by a content key.
+ * Which flow a payload carries — for logs, not for the wire.
+ *
+ * This used to decide the `native_flow` stanza's `name`, which turned out to be a
+ * fixed literal (`mixed`); the stanza does **not** carry the flow. What remains
+ * is the useful half: naming the flow in a log line, so "which flow did we just
+ * send" is answerable after the fact.
  *
  * A sectioned menu is `single_select`; everything else defaults to
- * `quick_reply`. CTA flows must be requested explicitly via `flowName`.
+ * `quick_reply`. CTA flows requested through the legacy keys say so via
+ * `flowName`.
  */
-export function interactiveFlowName(key: string, options: InteractiveOptions = {}): NativeFlowName {
+export function interactiveFlowName(
+  key: string,
+  options: InteractiveOptions = {},
+  payload?: Record<string, unknown>,
+): NativeFlowName {
   if (options.flowName) return options.flowName;
-  return key === 'listMessage' ? 'single_select' : 'quick_reply';
+  if (key === 'listMessage') return 'single_select';
+  if (key === 'interactiveButtons') {
+    const buttons = payload?.['interactiveButtons'];
+    const first = Array.isArray(buttons)
+      ? (buttons[0] as { name?: unknown } | undefined)?.name
+      : undefined;
+    if (typeof first === 'string' && isNativeFlowName(first)) return first;
+    return 'quick_reply';
+  }
+  return 'quick_reply';
 }
 
 /**
  * The stanza nodes WhatsApp needs before it will render an interactive element.
  *
  * Missing these is the whole failure mode: the message returns an ID and never
- * arrives. `biz_bot` is required only for 1:1 chats, which is why this takes the
- * target jid rather than being a constant.
+ * arrives. The node shape is fixed — see the file header for why the flow name
+ * does not appear in it — so this takes only the target jid, which decides
+ * whether the 1:1-only `bot` node rides along.
  */
-export function interactiveNodes(jid: string, flowName: NativeFlowName): Record<string, unknown>[] {
-  const nodes: Record<string, unknown>[] = [
+export function interactiveNodes(jid: string): Record<string, unknown>[] {
+  return [
     {
       tag: 'biz',
       attrs: {},
@@ -196,15 +277,17 @@ export function interactiveNodes(jid: string, flowName: NativeFlowName): Record<
         {
           tag: 'interactive',
           attrs: { type: 'native_flow', v: '1' },
-          content: [{ tag: 'native_flow', attrs: { name: flowName } }],
+          content: [
+            {
+              tag: 'native_flow',
+              attrs: { v: NATIVE_FLOW_STANZA_VERSION, name: NATIVE_FLOW_STANZA_NAME },
+            },
+          ],
         },
       ],
     },
+    ...(jid.endsWith('@g.us') ? [] : [{ tag: 'bot', attrs: { biz_bot: '1' } }]),
   ];
-  if (!jid.endsWith('@g.us')) {
-    nodes.push({ tag: 'bot', attrs: { biz_bot: '1' } });
-  }
-  return nodes;
 }
 
 /** One button, in the neutral shape the converter reads. */
@@ -231,13 +314,14 @@ interface FlatButton {
 export function wrapInteractive(
   key: string,
   payload: Record<string, unknown>,
+  rest: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
     viewOnceMessage: {
       message: {
         messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
         interactiveMessage: proto.Message.InteractiveMessage.fromObject(
-          toInteractiveInner(key, payload),
+          toInteractiveInner(key, payload, rest),
         ),
       },
     },
@@ -264,10 +348,56 @@ export function wrapInteractive(
 export function toInteractiveInner(
   key: string,
   payload: Record<string, unknown>,
+  rest: Record<string, unknown> = {},
 ): Record<string, unknown> {
   // Already a native interactive message — nothing to convert.
   if (key === 'interactiveMessage') {
     return payload;
+  }
+
+  if (key === 'interactiveButtons') {
+    // The reference API (`refs/atex-ovi__wabase-button/src/handler.js`) shape:
+    //
+    //   { text, title, subtitle, footer, interactiveButtons: [ { name, buttonParamsJson } ] }
+    //
+    // Note the split: `payload` is the **array** (it is what the key held), and
+    // the prose lives in `rest` alongside it. An earlier version of this branch
+    // read `payload.text` and silently produced a buttonless message — the exact
+    // failure the plugin exists to prevent, so `rest` is threaded in explicitly.
+    //
+    // Unlike `buttonsMessage` there is nothing to infer here: each entry already
+    // carries its real flow name, and the `native_flow` node is named from it.
+    const buttons = (Array.isArray(payload) ? payload : []) as Array<{
+      name?: string;
+      buttonParamsJson?: string;
+    }>;
+
+    const title = rest['title'];
+    const subtitle = rest['subtitle'];
+    const hasHeader = typeof title === 'string' || typeof subtitle === 'string';
+
+    return {
+      body: { text: String(rest['text'] ?? (typeof title === 'string' ? title : '')) },
+      ...(hasHeader
+        ? {
+            header: {
+              title: typeof title === 'string' ? title : '',
+              subtitle: typeof subtitle === 'string' ? subtitle : '',
+              hasMediaAttachment: false,
+            },
+          }
+        : {}),
+      ...(rest['footer'] ? { footer: { text: String(rest['footer']) } } : {}),
+      nativeFlowMessage: {
+        buttons: buttons.map((b, i) => ({
+          // No fallback flow is invented here: an unnamed button is what the
+          // client treats as a `quick_reply`, so say so rather than omitting it.
+          name: b.name ?? 'quick_reply',
+          buttonParamsJson:
+            b.buttonParamsJson ?? JSON.stringify({ display_text: `Button ${i + 1}`, id: `b${i + 1}` }),
+        })),
+      },
+    };
   }
 
   if (key === 'buttonsMessage') {
@@ -411,7 +541,9 @@ export function interactive(options: InteractiveOptions = {}): Plugin {
           invariant(content && typeof content === 'object', 'sendMessage needs content');
 
           const { [key]: payload, ...rest } = content as Record<string, unknown>;
-          const flowName = interactiveFlowName(key, options);
+          // The whole content, not just the payload: `interactiveButtons` carries
+          // its flow name inside its own buttons, and the stanza node has to match.
+          const flowName = interactiveFlowName(key, options, content as Record<string, unknown>);
 
           // A sectioned menu cannot leave a consumer account, so do not send one.
           // The alternative is a send that resolves and never arrives.
@@ -442,7 +574,7 @@ export function interactive(options: InteractiveOptions = {}): Plugin {
 
               const full = generateWAMessageFromContent(
                 jid,
-                wrapInteractive(key, payload as Record<string, unknown>),
+                wrapInteractive(key, payload as Record<string, unknown>, rest),
                 {
                   userJid: user.id,
                   quoted: sendOptions?.quoted as never,
@@ -465,10 +597,27 @@ export function interactive(options: InteractiveOptions = {}): Plugin {
                 inner.messageContextInfo.messageSecret = randomBytes(32);
               }
 
-              await sock.relayMessage(jid, inner, {
+              // Editing an interactive message needs the protocolMessage wrapper
+              // that `generateWAMessageContent` would have added. This plugin
+              // calls `generateWAMessageFromContent` instead, which never looks at
+              // `edit`, so a caller passing `{ text, edit, interactiveButtons }`
+              // had the edit silently dropped and got a brand-new message where
+              // they asked for an in-place update.
+              const outgoing = rest.edit
+                ? {
+                  protocolMessage: {
+                    key: rest.edit,
+                    editedMessage: inner,
+                    timestampMs: Date.now(),
+                    type: proto.Message.ProtocolMessage.Type.MESSAGE_EDIT,
+                  },
+                }
+                : inner;
+
+              await sock.relayMessage(jid, outgoing, {
                 messageId: full.key.id,
                 useCachedGroupMetadata,
-                additionalNodes: interactiveNodes(jid, flowName),
+                additionalNodes: interactiveNodes(jid),
               } as never);
 
               // What `sendMessage` does after relaying, so the outgoing message
@@ -476,7 +625,7 @@ export function interactive(options: InteractiveOptions = {}): Plugin {
               queueMicrotask(() => {
                 try {
                   sock.ev.emit('messages.update' as never, [
-                    { key: full.key, update: { message: full.message as never } },
+                    { key: full.key, update: { message: outgoing as never } },
                   ] as never);
                 } catch (err) {
                   log.debug('local history update failed', { err: (err as Error).message });
@@ -484,8 +633,7 @@ export function interactive(options: InteractiveOptions = {}): Plugin {
               });
 
               counters.sent += 1;
-              log.debug('sent interactive message', { kind: key, flow: flowName, jid, id: full.key.id });
-              void rest;
+              log.debug('sent interactive message', { kind: key, flow: flowName, jid, id: full.key.id, edit: Boolean(rest.edit) });
               return full;
             } catch (err) {
               counters.failed += 1;

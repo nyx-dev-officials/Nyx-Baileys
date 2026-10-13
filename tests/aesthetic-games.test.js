@@ -116,13 +116,18 @@ test('rps rejects an invalid throw', async () => {
 });
 
 test('rps score persists across calls in the same chat', async () => {
+  // Assert accumulation, not luck. The bot's throw is random, so demanding a
+  // draw in five attempts fails ~13% of runs and fails the whole suite with it.
   const state = new Map();
-  for (let i = 0; i < 4; i++) {
+  const rounds = 5;
+  for (let i = 0; i < rounds; i++) {
     await reg.run(sock, 'c@s.whatsapp.net', 'rps', 'rock', { state });
   }
   const last = await reg.run(sock, 'c@s.whatsapp.net', 'rps', 'paper', { state });
-  assert.match(last.text ?? '', /you \d+, bot \d+, draws \d+/);
-  assert.match(last.text ?? '', /draws [1-9]/, 'draws should have accumulated');
+  const m = /you (\d+), bot (\d+), draws (\d+)/.exec(last.text ?? '');
+  assert.ok(m, `score line missing from: ${last.text ?? ''}`);
+  const total = Number(m[1]) + Number(m[2]) + Number(m[3]);
+  assert.equal(total, rounds + 1, 'every round must accumulate into the same score');
 });
 
 test('game state does not leak between chats', async () => {

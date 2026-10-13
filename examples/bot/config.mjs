@@ -7,11 +7,13 @@
  * Set OWNERS to your own number before running.
  */
 
+import { FLUX_PREFIX } from '../../dist/index.js';
+
 export default {
   sessionDir: process.env.SESSION_DIR ?? './session',
 
-  // Command prefix. `/ping`.
-  prefix: process.env.PREFIX ?? '/',
+  // Command prefix. `flux ping`.
+  prefix: process.env.PREFIX ?? FLUX_PREFIX,
 
   // Owner numbers (international format, no +). Owner-only commands check this.
   owners: (process.env.OWNERS ?? '15551234567').split(',').map((s) => s.trim()).filter(Boolean),
@@ -19,7 +21,8 @@ export default {
   // Answer commands in group chats too.
   groups: process.env.GROUPS === 'true',
 
-  logLevel: process.env.LOG_LEVEL ?? 'info',
+  // Stanza spam off by default; the online/commands lines still print.
+  logLevel: process.env.LOG_LEVEL ?? 'warn',
 
   // The rejection messages. Any key can be overridden; the rest use defaults.
   messages: {

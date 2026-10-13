@@ -193,6 +193,30 @@ export function toUser(jidOrNumber: string): string {
   return digits ? `${digits}@s.whatsapp.net` : '';
 }
 
+const PREFIX_SEPARATORS = ' ./:-_/';
+
+/**
+ * Strip a trigger prefix, case-insensitively.
+ *
+ * The configured form matches first, so a custom prefix like `/` behaves
+ * exactly as before. When the configured word is flux-based, the separator
+ * family matches too — `flux ping`, `FLUX ping`, `flux.ping`, `flux:/ping` —
+ * and the bare word alone reports `bare` instead of an empty command. A longer
+ * word that merely starts with flux (`fluxbot`) never matches: the character
+ * after `flux` must be a separator or the end of the message.
+ */
+export function stripPrefix(body: string, prefix: string): { rest: string; bare: boolean } | null {
+  if (body.toLowerCase().startsWith(prefix.toLowerCase())) {
+    const rest = body.slice(prefix.length);
+    return { rest, bare: rest.trim() === '' };
+  }
+  if (prefix.trim().toLowerCase() !== 'flux') return null;
+  if (!/^flux(?=[\s./:_-]|$)/i.test(body)) return null;
+  let rest = body.slice('flux'.length);
+  if (rest.length > 0 && PREFIX_SEPARATORS.includes(rest[0] ?? '')) rest = rest.slice(1);
+  return { rest, bare: rest.trim() === '' };
+}
+
 export function commands(options: CommandOptions = {}): Plugin {
   const prefix = options.prefix ?? '/';
   const messages: CommandMessages = { ...DEFAULT_MESSAGES, ...options.messages };
@@ -324,9 +348,10 @@ export function commands(options: CommandOptions = {}): Plugin {
           | null
           | undefined;
         const body = m?.conversation ?? m?.extendedTextMessage?.text ?? '';
-        if (!body.startsWith(prefix)) return null;
+        const stripped = stripPrefix(body, prefix);
+        if (!stripped) return null;
         if (m?.extendedTextMessage?.contextInfo?.messageAssociation) return null;
-        return { body: body.slice(prefix.length) };
+        return { body: stripped.rest };
       };
 
       const run = async (msg: WAMessage): Promise<void> => {

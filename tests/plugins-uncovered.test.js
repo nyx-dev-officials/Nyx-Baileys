@@ -65,10 +65,19 @@ test('stealth pins one fingerprint and exposes it as __identity', () => {
   const id = sock.__identity;
   assert(id, '__identity not attached');
   assert(Array.isArray(id.browser) && id.browser.length === 3, `browser tuple: ${id.browser}`);
+  // The tuple layout is [os, engine, osVersion]. An earlier revision read it as
+  // [engine, version] and emitted `Ubuntu/Chrome.0.0.0` once the default moved
+  // off the old tuple — so assert the agreement the right way round: the UA
+  // names the engine and carries the platform token for the OS.
   assert(id.userAgent.includes('Chrome'), `ua should name the engine: ${id.userAgent}`);
   assert(
-    id.userAgent.includes(`Chrome/${id.browser[1]}.`),
-    'the ua version must match the pinned tuple, or the two disagree',
+    id.userAgent.includes('X11; Linux x86_64'),
+    `ua should carry Ubuntu's platform token: ${id.userAgent}`,
+  );
+  assert.doesNotMatch(
+    id.userAgent,
+    /Ubuntu\/Chrome/,
+    'the OS must never appear in the engine slot',
   );
 });
 

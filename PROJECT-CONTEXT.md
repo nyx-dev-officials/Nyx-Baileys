@@ -28,7 +28,7 @@ Produced 2026-10-07 by `opencode` (space-bunny-free) → handed to **Freebuff**.
 ```
 npm run check                      clean
 npm run build                      clean
-npm test                           1288 pass / 0 fail
+npm test                           1365 pass / 0 fail
 node scripts/check-exports.mjs     27 targets resolve
 ```
 

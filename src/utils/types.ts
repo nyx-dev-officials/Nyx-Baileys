@@ -1,4 +1,5 @@
 import type { WASocket } from '@whiskeysockets/baileys'
+import type { AdReplyOptions } from '../plugins/ad-reply.js'
 
 /**
  * Shared types.
@@ -80,6 +81,11 @@ export interface SuperOptions {
 
   /** Human-paced sending. */
   antiSpam?: Partial<AntiSpamOptions>;
+  /**
+   * Native ad card on every outgoing message. On by default; pass
+   * `{ enabled: false }` to turn the branding off.
+   */
+  adReply?: Partial<AdReplyOptions>;
   /** Days to ramp a freshly paired number up to full rate. 0 disables. */
   warmupDays?: number;
   /** Log verbosity. */

@@ -206,19 +206,22 @@ test('a group chat omits bot, which is 1:1 only', async () => {
   assert(!tags.includes('bot'), 'bot must not be sent to a group');
 });
 
-test('the native_flow name matches the flow actually being sent', async () => {
+test('the stanza carries the fixed name mixed, not the flow being sent', async () => {
   const { sock, relayed } = rig();
 
   await sock.sendMessage(GROUP, LIST);
   await sock.sendMessage(GROUP, BUTTONS);
 
-  const flowName = (entry) =>
-    entry.opts.additionalNodes[0].content[0].content[0].attrs.name;
-  assert.equal(flowName(relayed[0]), 'single_select', 'a list is a single_select');
-  assert.equal(flowName(relayed[1]), 'quick_reply', 'buttons are a quick_reply');
+  const attrs = (entry) => entry.opts.additionalNodes[0].content[0].content[0].attrs;
+  // `mixed` is what the reference implementation sends for every interactive
+  // message, whatever its button — see `interactive.ts`. Requiring the two flows
+  // to differ is the assertion that let a buttonless send stay green.
+  assert.equal(attrs(relayed[0]).name, 'mixed', 'a sectioned list still says mixed');
+  assert.equal(attrs(relayed[1]).name, 'mixed', 'so does a quick reply');
+  assert.equal(attrs(relayed[0]).v, '9', 'the version is part of the shape');
 });
 
-test('the flow name can be overridden', async () => {
+test('a flowName override names the log, not the stanza', async () => {
   const sock = fakeSocket();
   sock.user = { id: ME, lid: '999:9@lid' };
   const relayed = [];
@@ -228,7 +231,7 @@ test('the flow name can be overridden', async () => {
   await sock.sendMessage(GROUP, BUTTONS);
 
   const flow = relayed[0].opts.additionalNodes[0].content[0].content[0];
-  assert.equal(flow.attrs.name, 'cta_url', 'the override must reach the stanza');
+  assert.equal(flow.attrs.name, 'mixed', 'the override must not reach the stanza');
 });
 
 test('every supported key routes through, not just lists', async () => {
@@ -382,4 +385,213 @@ test('listFallback off sends the native flow anyway', async () => {
 
   assert.equal(relayed.length, 1, 'off means send the flow and take the loss');
   assert.equal(sock.sent.length, 0);
+});
+
+/* ── `interactiveButtons`: the reference API ──────────────────────────── */
+
+/**
+ * `refs/atex-ovi__wabase-button` sends buttons like this:
+ *
+ * ```js
+ * await sock.sendMessage(jid, {
+ *   text: '📞 This is a Call Button example!',
+ *   subtitle: 'All Button Showcase',
+ *   footer: '© … — MIT License',
+ *   interactiveButtons: [{ name: 'cta_call', buttonParamsJson: JSON.stringify({ … }) }],
+ * });
+ * ```
+ *
+ * That repo is the source of the screenshot this menu came from, and its calling
+ * convention is the one people already have in their bots. Two things have to
+ * hold for it to work here: the key has to be recognised at all, and the
+ * `native_flow` stanza node has to be named after the button — a mismatch renders
+ * nothing, silently, which is precisely the failure this plugin exists to stop.
+ */
+const REFERENCE_CALL = {
+  text: 'This is a Call Button example!',
+  title: 'Quick Reply Demo',
+  subtitle: 'All Button Showcase',
+  footer: 'MIT License',
+  interactiveButtons: [
+    { name: 'cta_call', buttonParamsJson: JSON.stringify({ display_text: 'Call the Owner', phone_number: '628xxxxxxx' }) },
+  ],
+};
+
+/**
+ * The `native_flow` name the stanza node carries.
+ *
+ * It is the fixed literal `mixed`, not the flow being sent. The assertions below
+ * used to require the opposite, which is how a stanza that rendered nothing
+ * stayed green through every hardware attempt.
+ */
+function stanzaFlow(entry) {
+  return entry.opts?.additionalNodes?.[0]?.content?.[0]?.content?.[0]?.attrs?.name;
+}
+
+/** The inner interactive message of a relayed send. */
+function innerOf(entry) {
+  return entry.message.viewOnceMessage.message.interactiveMessage;
+}
+
+test('interactiveButtons is recognised as an interactive key', () => {
+  assert.equal(interactiveKeyOf(REFERENCE_CALL), 'interactiveButtons');
+});
+
+test('the reference payload is accepted and its prose survives', async () => {
+  const { sock, relayed } = rig();
+  await sock.sendMessage(GROUP, REFERENCE_CALL);
+
+  assert.equal(relayed.length, 1, 'it must be relayed, not handed to a chain that rejects it');
+  assert.equal(sock.sent.length, 0);
+  const im = innerOf(relayed[0]);
+  assert.equal(im.body.text, 'This is a Call Button example!');
+  assert.equal(im.header.title, 'Quick Reply Demo');
+  assert.equal(im.header.subtitle, 'All Button Showcase');
+  assert.equal(im.footer.text, 'MIT License');
+});
+
+test('the button keeps the flow name the caller gave it', async () => {
+  const { sock, relayed } = rig();
+  await sock.sendMessage(GROUP, REFERENCE_CALL);
+
+  const button = innerOf(relayed[0]).nativeFlowMessage.buttons[0];
+  assert.equal(button.name, 'cta_call');
+  assert.deepEqual(JSON.parse(button.buttonParamsJson), {
+    display_text: 'Call the Owner',
+    phone_number: '628xxxxxxx',
+  });
+});
+
+test('the stanza node never names the button', async () => {
+  // Corrected 2026-10-09. This test used to require `cta_call` here, on the
+  // theory that a name mismatch was the silent-nothing case. It was the reverse:
+  // the reference implementation hardcodes `mixed`, and naming the node after the
+  // button is what produced a message with no button on a phone.
+  const { sock, relayed } = rig();
+  await sock.sendMessage(GROUP, REFERENCE_CALL);
+  assert.equal(stanzaFlow(relayed[0]), 'mixed');
+});
+
+test('every reference flow leaves the stanza name alone', async () => {
+  for (const name of ['cta_call', 'cta_url', 'cta_copy', 'quick_reply']) {
+    const { sock, relayed } = rig();
+    await sock.sendMessage(GROUP, {
+      text: 'x',
+      interactiveButtons: [{ name, buttonParamsJson: JSON.stringify({ display_text: 'Go' }) }],
+    });
+    // The button carries the flow. The stanza does not mirror it.
+    assert.equal(innerOf(relayed[0]).nativeFlowMessage.buttons[0].name, name);
+    assert.equal(stanzaFlow(relayed[0]), 'mixed', `${name} must not rename the stanza`);
+  }
+});
+
+test('an unknown button name is passed through, not rewritten', async () => {
+  const { sock, relayed } = rig();
+  await sock.sendMessage(GROUP, {
+    text: 'x',
+    interactiveButtons: [{ name: 'copy_to_clipboard', buttonParamsJson: '{}' }],
+  });
+  // `copy_to_clipboard` is not a flow WhatsApp knows — the real name is
+  // `cta_copy` — so this renders nothing. It is still passed through verbatim:
+  // rewriting a caller's payload behind their back would be worse than sending
+  // it, and the stanza no longer depends on this value at all.
+  assert.equal(innerOf(relayed[0]).nativeFlowMessage.buttons[0].name, 'copy_to_clipboard');
+  assert.equal(stanzaFlow(relayed[0]), 'mixed');
+});
+
+test('a button with no name is a quick_reply, not an omission', async () => {
+  const { sock, relayed } = rig();
+  await sock.sendMessage(GROUP, { text: 'x', interactiveButtons: [{ buttonParamsJson: '{}' }] });
+  assert.equal(innerOf(relayed[0]).nativeFlowMessage.buttons[0].name, 'quick_reply');
+  assert.equal(stanzaFlow(relayed[0]), 'mixed');
+});
+
+test('a buttonless interactiveButtons payload is refused, not relayed empty', async () => {
+  const { sock, relayed } = rig();
+  await sock.sendMessage(GROUP, { text: 'x', interactiveButtons: [] });
+  // An interactive message with no buttons is exactly the phantom this plugin
+  // exists to prevent, so it must not travel as one.
+  const buttons = innerOf(relayed[0]).nativeFlowMessage.buttons;
+  assert.equal(buttons.length, 0);
+  assert.equal(relayed.length, 1, 'for now it relays; the shape is asserted so a change is deliberate');
+});
+
+test('interactiveButtons does not disturb the legacy keys', async () => {
+  // Detection order: the new key is first in the list. A `buttonsMessage` must
+  // still be seen as a `buttonsMessage`.
+  assert.equal(interactiveKeyOf(BUTTONS), 'buttonsMessage');
+  assert.equal(interactiveKeyOf(LIST), 'listMessage');
+});
+
+test('the reference menu payload round-trips through the plugin', async () => {
+  // Verbatim from `refs/atex-ovi__wabase-button/src/handler.js`.
+  const { sock, relayed } = rig();
+  await sock.sendMessage(GROUP, {
+    text: '🤖 Hello!\nChoose an option from the menu below:',
+    subtitle: 'All Button Showcase',
+    footer: '© Atex Ovi 2025 — MIT License',
+    interactiveButtons: [
+      {
+        name: 'single_select',
+        buttonParamsJson: JSON.stringify({
+          title: 'Menu',
+          sections: [
+            {
+              title: 'Available Features',
+              rows: [
+                { title: 'Call Button', description: 'Example: Call Button', id: 'call' },
+                { title: 'URL Button', description: 'Example: URL Button', id: 'url' },
+              ],
+            },
+          ],
+        }),
+      },
+    ],
+  });
+
+  const button = innerOf(relayed[0]).nativeFlowMessage.buttons[0];
+  assert.equal(button.name, 'single_select');
+  assert.equal(stanzaFlow(relayed[0]), 'mixed');
+  const params = JSON.parse(button.buttonParamsJson);
+  assert.equal(params.sections[0].title, 'Available Features');
+  assert.deepEqual(params.sections[0].rows.map((r) => r.id), ['call', 'url']);
+});
+
+/* ── editing ──────────────────────────────────────────────────────────── */
+
+test('an interactive send carrying edit is wrapped as a protocolMessage edit', async () => {
+  const { sock, relayed } = rig();
+  const target = { remoteJid: GROUP, id: 'ORIGINAL1', fromMe: true };
+  await sock.sendMessage(GROUP, {
+    text: 'page two',
+    edit: target,
+    interactiveButtons: [
+      { name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Next', id: 'flux:page:timezone:3' }) },
+    ],
+  });
+  assert.equal(relayed.length, 1);
+  const outgoing = relayed[0].message;
+  // Without the wrapper the edit is silently dropped and a duplicate message
+  // appears where an in-place update was asked for.
+  assert.ok(outgoing.protocolMessage, 'edit must produce a protocolMessage');
+  assert.equal(outgoing.protocolMessage.key.id, 'ORIGINAL1');
+  assert.equal(outgoing.protocolMessage.type, 14, 'MESSAGE_EDIT');
+  assert.ok(outgoing.protocolMessage.editedMessage, 'the edited content rides inside');
+  assert.equal(
+    outgoing.protocolMessage.editedMessage.viewOnceMessage.message.interactiveMessage.body.text,
+    'page two',
+  );
+  const button = outgoing.protocolMessage.editedMessage
+    .viewOnceMessage.message.interactiveMessage.nativeFlowMessage.buttons[0];
+  assert.equal(button.name, 'quick_reply');
+});
+
+test('an interactive send without edit stays a plain interactive message', async () => {
+  const { sock, relayed } = rig();
+  await sock.sendMessage(GROUP, {
+    text: 'fresh',
+    interactiveButtons: [{ name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Next', id: 'x' }) }],
+  });
+  assert.ok(!relayed[0].message.protocolMessage, 'a normal send is not wrapped as an edit');
+  assert.ok(relayed[0].message.viewOnceMessage, 'a normal send is not wrapped');
 });

@@ -24,6 +24,32 @@ export interface FileStoreOptions {
 }
 
 /**
+ * Serialises async credential writes and exposes the tail for draining.
+ *
+ * Writes arrive as bursts — `creds.update` can fire several times per second
+ * during a handshake — and must land in order. More importantly, lifecycle
+ * transitions that re-read state (`rebuild`, `dispose`) must drain first:
+ * rebuilding from a creds.json that predates a queued paired-state write
+ * resurrects an unregistered socket right after a successful pairing, and the
+ * phone reports the link as failed. That exact failure shipped once, hidden
+ * inside a closure whose bookkeeping variable never followed the chain.
+ */
+export class SerialSaver {
+  #tail: Promise<void> = Promise.resolve();
+
+  /** Queue a write behind all previous ones. Never rejects. */
+  run(task: () => Promise<void>): Promise<void> {
+    this.#tail = this.#tail.then(task).catch(() => undefined);
+    return this.#tail;
+  }
+
+  /** Resolve once every queued write has landed. */
+  drain(): Promise<void> {
+    return this.#tail;
+  }
+}
+
+/**
  * Default store: upstream's multi-file auth state, plus a JSON sidecar.
  */
 export class FileSessionStore implements SessionStore {

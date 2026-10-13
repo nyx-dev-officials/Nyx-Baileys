@@ -9,6 +9,29 @@ rc14 and are still in the tree. Each item below is a *measured* falsehood.
 
 ---
 
+## Status — re-measured 2026-10-08
+
+This queue is kept for its measurements, **not as a to-do list.** Every item it
+raised has since been fixed or retracted, so do not act on a "Fix:" line without
+checking the tree first:
+
+| § | Item | State |
+|---|---|---|
+| 1a | flow-form parser reported MISSING | Fixed before this queue was written; `docs/VERIFICATION.md` role 7 reads COVERED |
+| 1b/1c | `editedMessage` wrapper recommended for edits | Corrected in `docs/VERIFICATION.md` §4 and `ARCHITECTURE.md` §5.6 — the real form is `{ text, edit: key }` |
+| 2 | `adapters/` documented in `ARCHITECTURE.md` | Removed; the subsystem was deleted in `0ece183` |
+| 3 | nine `adapters` rows in `FEATURES.md` | Rows deleted, numbering left with intentional gaps |
+| 4 | `HOW-IT-WORKS.md` list/listMessage rows | Corrected; `single_select` now marked **disputed** — see §5-6 |
+| 5-6 | `single_select` is a server-side Business-tier gate | **Disputed, not settled.** `docs/VERIFICATION.md` retracts this and reports the menu rendering once the row key is `id`. Both measured 2026-10-05; no tap has ever been observed returning from a phone |
+| 8 | interactive variants beyond `quick_reply` | **Still unverified** — unchanged |
+| 9 | `createEdit` undocumented | Documented under **Breaking** in `CHANGELOG.md` for 0.3.1 |
+
+The row-key finding in §5 — the wire field is `id`, not `rowId` — is the one claim
+here that every later measurement agreed with, and it is pinned by
+`tests/category-menu.test.js` and `tests/feature-font.test.js`.
+
+---
+
 ## 1. `docs/VERIFICATION.md` — three claims that are now false
 
 ### 1a. Line 64, role 7 "Webflow form input parser — MISSING"
@@ -176,8 +199,28 @@ bot  biz_bot=1        ← 1:1 chats only
 
 passed as `relayMessage`'s `additionalNodes` (`Socket/messages-send.js:1133`).
 
-The `native_flow` name must match the flow actually sent. `single_select` is
-accepted by the encoder and stripped by the server.
+**This entry is itself a measured falsehood — corrected 2026-10-09.**
+
+The name must **not** match the flow sent. The node is fixed:
+`{ tag: 'native_flow', attrs: { v: '9', name: 'mixed' } }` — the same two literal
+attributes for every interactive send, whether the button is `single_select`,
+`quick_reply`, `cta_url`, `cta_call` or `cta_copy`.
+
+This is the exact failure mode this file exists to catch: a claim written down as
+measured, tested by asserting itself, and wrong. It cost a full evening of live
+sends that each returned a message id and rendered nothing. The suite was green
+the whole time, because the tests asserted `name === the button's flow`.
+
+`single_select` is neither stripped by the server nor special-cased by the
+encoder: with the corrected node it renders a working menu on a consumer account,
+confirmed on a phone on 2026-10-09.
+
+Where the correct shape comes from — read it, do not re-derive it:
+`atexovi-baileys@7.5.6-rc.6` (the fork pinned by `refs/atex-ovi__wabase-button`),
+`lib/Socket/messages-send.js` in `relayMessage`. It hardcodes `{ v: '9',
+name: 'mixed' }` for `interactiveMessage`, `buttonsMessage` and `listMessage`, and
+builds the `biz` node itself — its `sendMessage` passes no `additionalNodes` at
+all, so nothing in the reference bot mentions any of this.
 
 ---
 

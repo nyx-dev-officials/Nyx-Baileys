@@ -1,7 +1,7 @@
 # PLUGIN API
 
 How to write, attach, order and dispose a Nyx-Baileys plugin, and what the
-eleven built-in plugins add to the socket.
+fourteen built-in plugins add to the socket.
 
 Source of truth: `src/utils/types.ts:16-38` (the interface),
 `src/nyxBaileys.ts:164-190` (how it is invoked),
@@ -102,6 +102,8 @@ class Bare extends NyxBaileys {
 | Order | Plugin |
 |---|---|
 | 10 | `stealth` |
+| 12 | `verifiedSpoof` |
+| 15 | `clockSync` |
 | 20 | `lidRouter` |
 | 30 | `mediaStreamer` |
 | 40 | `albumHandler` |
@@ -110,8 +112,13 @@ class Bare extends NyxBaileys {
 | 65 | `sessionRepair` |
 | 70 | `autoReconnect` |
 | 80 | `antiSpam` |
+| 85 | `delivery` |
 | 90 | `flowEngine` |
 | 100 | `warmup` |
+
+Verified against `nyxBaileys.ts` `plugins()`, which is the source of truth — this
+table previously listed the eleven-plugin chain and omitted `verifiedSpoof`,
+`clockSync` and `delivery`.
 
 Slots are spaced by ten, which leaves room. The ordering rule in one line:
 
@@ -235,13 +242,12 @@ conditional one is correct. `antiSpam` logs a warning naming the missing method
 (`antiSpam.ts:109-113`) — do the same, because a silently inert plugin is the
 worst outcome.
 
-**Known limitation.** The pristine stash in `patch()` is created once per target
-object and holds only the first method patched on it
-(`intercept.ts:57-64`), so `undo()` for a *second* method on the same socket
-assigns `undefined` rather than the original. Reproduce it with
-`patchAll(sock, { a, b })` then `result[0].undo()`. Until that is fixed, prefer
-registering one `onDispose` per patch and prefer `patch` over `patchAll` for
-multi-method targets. See `ARCHITECTURE.md` §2.
+**Fixed — the stash now merges per method.** `patch()` used to create its
+pristine stash once per target object and store only the *first* method it saw,
+so `undo()` for a second method on the same socket assigned `undefined` over a
+live method. It now merges each method's original into the existing stash
+(`intercept.ts:57-65`), and `patchAll(sock, { a, b })` unwinds both correctly.
+`FEATURES.md` recorded this as Tier-2 #191; it is closed.
 
 **Listeners you cannot unregister.** Some built-in plugins register listeners
 directly on `sock.ev` and leave them, on the reasoning that the listener dies with
@@ -484,10 +490,12 @@ Control the registry at runtime via `sock.flows`
 
 One caveat from `src/plugins/flow.ts:14-16`: flow state is per-chat and in memory,
 so a restart drops in-flight conversations. That is right for short flows; flows
-that must survive a restart persist into `ctx.state` themselves. And note that
-`goto()` is not yet guarded against a flow that ended or expired between the call
-and the dispatch (`flow.ts:189-196`) — `VERIFICATION.md` D4, still open. If you
-call `ctx.end()` and then `ctx.goto(...)`, the `goto` is a silent no-op.
+that must survive a restart persist into `ctx.state` themselves.
+
+`goto()` is guarded (`flow.ts:199-203`): it warns and returns rather than
+dispatching into a flow that ended or TTL-expired between the call and the jump,
+so a `ctx.end()` followed by `ctx.goto(...)` is visible instead of silent.
+`VERIFICATION.md` D4 is closed.
 
 ---
 
@@ -560,11 +568,11 @@ the parent carries counts only, and sibling linkage is
 Defaults: 200 messages per chat, 100 statuses, 100 media blobs, 60 s interval
 (`memory.ts:39-43`). `stats()` returns `{ chats, media, statuses, heapMb }`.
 
-Two honest caveats. Media eviction at `memory.ts:73-79` currently removes the
-blobs **holding** bytes and skips the already-empty ones — the inverse of what
-its own comment says, and there is no refcount, so an in-flight download can lose
-its entry (`VERIFICATION.md` D7, open). And `take()` deletes on read, so it is a
-consume-once accessor, not a cache.
+One honest caveat: `take()` deletes on read, so it is a consume-once accessor,
+not a cache. Eviction is refcount-guarded — a blob a caller has `acquire`d
+(`refs > 1`) is skipped by the sweep rather than deleted under a live reader
+(`memory.ts:130`), and `acquire`/`release` (`:210-229`) pair around a read.
+`VERIFICATION.md` D7 is closed.
 
 ### `group-guard` — order 60
 
@@ -576,9 +584,9 @@ consume-once accessor, not a cache.
 
 `kind` is `'mass-add'` (8+ joins inside 10 minutes by default) or
 `'privilege-climb'`. **Read-only by design** — alerts are reported, never acted
-on. The privilege-climb check is currently a counter, not a detector: `known`
-counts promote events, so `known >= 3` means "three promotes seen", not "every
-member is an admin" (`VERIFICATION.md` D6, open).
+on. The privilege-climb signal measures the observed admin set against observed
+membership (`group.ts:129`), so a demotion genuinely lowers it rather than
+leaving a promote counter to fire on its own. `VERIFICATION.md` D6 is closed.
 
 ### `session-repair` — order 65
 
@@ -655,10 +663,10 @@ No socket helpers. It reads `warmupStartedAt` from `ctx.state`, computes
 `rampFor(startedAt, days)` (8× → 1×, `1 + 7·(1-progress)²`, exported as
 `rampFor`), and pushes it into `__antispam.setPressure`.
 
-Two caveats: the ramp is evaluated **once per socket build**, never on an
-interval, so a long-lived process holds its day-one multiplier for the socket's
-life (`VERIFICATION.md` D14, open); and on the first run it only records
-`warmupStartedAt` and returns, so the first session is not throttled.
+One caveat: on the first run it only records `warmupStartedAt` and returns, so
+the first session is not throttled. The ramp is re-evaluated hourly
+(`warmup.ts:60-64`), so a long-lived process eases toward 1× instead of holding
+its day-one multiplier for the socket's life. `VERIFICATION.md` D14 is closed.
 
 ### `metrics` — newer layer, not in the default chain
 

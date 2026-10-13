@@ -92,7 +92,7 @@ recipient `62882017467912`, same session, minutes apart.
 | `quick_reply` | **VERIFIED** — renders, buttons tappable, reply routes back |
 | `cta_url`, `cta_call` | **VERIFIED** — both render, sent through the same stanza path as `quick_reply`. |
 | `cta_copy` | **VERIFIED**, but only under the name `cta_copy`. `copy_to_clipboard` is accepted by the encoder and silently dropped. |
-| `single_select` | **WORKS — see the retraction below.** An earlier entry here called it impossible on consumer accounts. That was wrong. |
+| `single_select` | **DISPUTED — see the retraction and the counter-measurement below.** This document retracts the earlier "impossible" conclusion and reports the menu rendering once the row key was corrected from `rowId` to `id`. `AGENTS-FIX-QUEUE.md` §5-6 — measured the same day — records it returning a valid ID and **never arriving**. Neither claim is settled. |
 
 `single_select` renders a categorised bottom-sheet menu on a consumer account.
 
@@ -148,8 +148,23 @@ biz
 bot  biz_bot=1        ← 1:1 chats only
 ```
 
-The `native_flow` name must match the flow actually being sent.
-Implementation: `src/plugins/interactive.ts`.
+**Corrected 2026-10-09 — the name in that block is wrong.** The node the client
+actually requires is `{ tag: 'native_flow', attrs: { v: '9', name: 'mixed' } }`:
+both attributes are fixed literals, and neither is the flow being sent. The line
+above reads `name=quick_reply` because that was the flow under test when the node
+was first written up; deriving a per-flow name from it produced a stanza the
+client silently refuses to render, so every interactive send arrived without its
+button while the suite stayed green.
+
+Verified on a phone the same day, and the source of the shape is the
+implementation that renders: `atexovi-baileys@7.5.6-rc.6`, the fork pinned by
+`refs/atex-ovi__wabase-button`, whose `relayMessage` (`lib/Socket/messages-send.js`)
+hardcodes `{ v: '9', name: 'mixed' }` for every `interactiveMessage`,
+`buttonsMessage` and `listMessage`. It builds those nodes itself, which is why
+user code there never mentions `additionalNodes`.
+
+Implementation: `src/plugins/interactive.ts` — `NATIVE_FLOW_STANZA_NAME` and
+`NATIVE_FLOW_STANZA_VERSION`.
 
 ### Unverified — do not assume
 
@@ -175,7 +190,7 @@ with what a real phone echoes back still needs one live selection. Until then,
 > ```
 > check  tsc -p tsconfig.json --noEmit    ✅
 > build  tsc -p tsconfig.json             ✅
-> test   node --test ./tests/*.test.js    ✅ 689 pass / 0 fail
+> test   node --test ./tests/*.test.js    ✅ 1365 pass / 0 fail
 > lint   tsc -p tsconfig.json --noEmit    ✅
 > ```
 >
@@ -323,8 +338,12 @@ const patched = function (this: unknown, ...args: unknown[]) {
 
 ---
 
-### D4 — HIGH · `run()` re-entrancy: `goto()` into a step can be dropped
+### D4 — RESOLVED · `run()` re-entrancy: `goto()` into a step can be dropped
 `src/plugins/flow.ts:137` inside `buildContext`, `:144-147` inside `run`
+
+> **Fixed.** `goto()` checks that the flow is still active and warns before
+> dispatching (`flow.ts:199-203`), so a jump into an ended or TTL-expired flow is
+> visible instead of a silent no-op. Re-measured 2026-10-08.
 
 `goto` calls `void run(jid, next)`. `run` reads `active.get(jid)` and returns early
 if absent. If a step calls `ctx.end()` and then `ctx.goto(...)` — or if the flow was
@@ -397,8 +416,12 @@ rc14 emits `creds.update` from many places (`lib/Socket/chats.js:778`,
 
 ---
 
-### D6 — MEDIUM · privilege-climb check is tautological
+### D6 — RESOLVED · privilege-climb check is tautological
 `src/plugins/group.ts:93-113`
+
+> **Fixed.** The signal divides the observed admin set by observed membership
+> (`group.ts:129`), so a demotion genuinely lowers it instead of leaving a
+> promote counter to fire on its own. Re-measured 2026-10-08.
 
 The comment at `:101-102` says "Everyone seen in this group so far has been an
 admin. Normal groups have plenty of plain members." But `admins` is **only** ever
@@ -598,8 +621,13 @@ complete; and `completedAt` is not re-stamped once reached.
 
 ---
 
-### D13 — LOW · `main()` installs a second `connection.update` listener
+### D13 — RESOLVED · `main()` installs a second `connection.update` listener
 `src/index.ts:301-306`
+
+> **Fixed.** No `connection.update` listener is registered outside
+> `NyxBaileys.#wireConnection`; `src/index.ts:474` records the removal.
+> Re-measured 2026-10-08. `ARCHITECTURE.md` §4 already recorded this as closed —
+> the source is the tiebreak, and the source agrees with `ARCHITECTURE.md`.
 
 `NyxBaileys.#wireConnection` (`nyxBaileys.ts:193`) is documented as the single
 owner of that event. `main()` adds its own that calls `client.dispose()` on close,
@@ -608,7 +636,7 @@ mid-rebuild. Latent until D9 lands.
 
 ---
 
-### D14 — INFO · `warmup` × `antiSpam` coupling — verified WORKING, one caveat
+### D14 — RESOLVED · `warmup` × `antiSpam` coupling — verified WORKING
 
 The user asked specifically. Findings:
 
@@ -631,10 +659,11 @@ age  24h -> 4.111x     age 72h -> 1.000x  (clamped)
 `(1-progress)^2` easing gives a fast early drop, matching the comment. `days <= 0`
 returns 1 (disabled). Correct.
 
-**One caveat — the ramp is applied once, never re-evaluated.** `warmup.apply` runs
-exactly once per socket build. A long-lived process connecting on day 1 computes
-`8.000x` and holds that multiplier for the socket's entire life; it never decays to
-1× as the session ages. The docstring at `:10-11` claims "the ramp survives
+**One caveat, since fixed — the ramp was applied once and never re-evaluated.**
+`warmup.apply` ran exactly once per socket build, so a long-lived process
+connecting on day 1 computed `8.000x` and held that multiplier for the socket's
+entire life. It now re-evaluates hourly (`warmup.ts:60-64`), so the multiplier
+eases toward 1× as the session ages. Re-measured 2026-10-08. The docstring at `:10-11` claims "the ramp survives
 restarts", which is true, but the ramp only *advances* on restart.
 
 Fix — re-evaluate on an interval:

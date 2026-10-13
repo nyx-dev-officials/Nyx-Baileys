@@ -37,6 +37,7 @@ export type ProviderId =
   | 'groq'
   | 'openrouter'
   | 'ollama'
+  | 'pollinations'
   | 'echo';
 
 export interface ProviderConfig {
@@ -66,6 +67,11 @@ export const PROVIDER_DEFAULTS: Record<ProviderId, {
   gemini: { model: 'gemini-2.0-flash', baseUrl: 'https://generativelanguage.googleapis.com/v1beta', contextWindow: 1_000_000, maxTokens: 4096, keyless: false },
   groq: { model: 'llama-3.3-70b-versatile', baseUrl: 'https://api.groq.com/openai/v1', contextWindow: 128_000, maxTokens: 4096, keyless: false },
   openrouter: { model: 'nvidia/nemotron-3-ultra-550b-a55b:free', baseUrl: 'https://openrouter.ai/api/v1', contextWindow: 1_000_000, maxTokens: 4096, keyless: false },
+  // Pollinations' classic GET text endpoint. Keyless and verified live, unlike
+  // their OpenAI-compatible POST which 401s without a key. Single prompt in,
+  // plain text out — no chat roles, no tools, no streaming. The `openai` model
+  // is their router alias, always passed explicitly: omitting it returns empty.
+  pollinations: { model: 'openai', baseUrl: 'https://text.pollinations.ai', contextWindow: 32_768, maxTokens: 1024, keyless: true },
   ollama: { model: 'llama3.2', baseUrl: 'http://127.0.0.1:11434/v1', contextWindow: 32_768, maxTokens: 2048, keyless: true },
   echo: { model: 'none', baseUrl: '', contextWindow: 4096, maxTokens: 256, keyless: true },
 };
@@ -287,7 +293,7 @@ async function fetchTimeout(
 export async function complete(
   config: ProviderConfig,
   history: ChatMessage[],
-  options: { tools?: ToolRegistry; system?: string; /** Attempts on empty or transient failure. Default 2. */ attempts?: number } = {},
+  options: { tools?: ToolRegistry; system?: string; /** Attempts on empty or transient failure. Default 3. */ attempts?: number } = {},
 ): Promise<Completion> {
   const defaults = PROVIDER_DEFAULTS[config.provider];
   const timeoutMs = config.timeoutMs ?? 30_000;
@@ -318,6 +324,20 @@ export async function complete(
     ? [{ role: 'system' as const, content: system }, ...history.filter((m) => m.role !== 'system')]
     : history;
 
+  // A vision turn carries `ContentPart[]` as a message body. Only the
+  // OpenAI-compatible path forwards parts verbatim; every other provider gets the
+  // textual half. That is honest — it loses the pixels, not the meaning — and it
+  // avoids the hard 400 a parts array produces on a provider that cannot accept
+  // one, which would turn "here is a photo" into a broken turn.
+  const supportsParts = config.provider === 'openai' || config.provider === 'groq'
+    || config.provider === 'openrouter' || config.provider === 'ollama';
+  const inlineText = (content: ChatMessage['content']): string => (typeof content === 'string'
+    ? content
+    : content.filter((p) => p.type === 'text' && p.text).map((p) => String(p.text)).join('\n'));
+  const withMedia: ChatMessage[] = supportsParts
+    ? withSystem
+    : withSystem.map((m) => (typeof m.content === 'string' ? m : { ...m, content: inlineText(m.content) }));
+
   /**
    * One dispatch, no retry.
    *
@@ -327,13 +347,15 @@ export async function complete(
   const dispatch = async (): Promise<Completion> => {
     switch (config.provider) {
       case 'echo':
-        return echoCompletion(model, withSystem);
+        return echoCompletion(model, withMedia);
+      case 'pollinations':
+        return pollinations(base, config, withMedia, { system: options.system, timeoutMs });
       case 'anthropic':
-        return anthropic(base, { ...config, apiKey }, withSystem, { temperature, maxTokens, timeoutMs });
+        return anthropic(base, { ...config, apiKey }, withMedia, { temperature, maxTokens, timeoutMs });
       case 'gemini':
-        return gemini(base, { ...config, apiKey }, withSystem, { temperature, maxTokens, timeoutMs });
+        return gemini(base, { ...config, apiKey }, withMedia, { temperature, maxTokens, timeoutMs });
       default:
-        return openaiCompatible(base, { ...config, apiKey }, withSystem, {
+        return openaiCompatible(base, { ...config, apiKey }, withMedia, {
           temperature, maxTokens, timeoutMs, tools: options.tools,
         });
     }
@@ -720,6 +742,60 @@ export function freeConfig(
 }
 
 /** OpenAI and every OpenAI-compatible endpoint (groq, openrouter, ollama, most proxies). */
+/**
+ * Pollinations classic text endpoint: one GET, plain text back.
+ *
+ * Deliberately not OpenAI-compatible — their compatible POST requires a key
+ * while this GET is keyless (verified live). The shape forces three honest
+ * limits: history is flattened into a single prompt (roles preserved as
+ * labels), over-long prompts are tail-truncated rather than silently dropped
+ * by URL limits, and there are no tools, no streaming, no temperature.
+ */
+async function pollinations(
+  base: string,
+  config: ProviderConfig,
+  history: ChatMessage[],
+  opts: { system?: string; timeoutMs: number },
+): Promise<Completion> {
+  const textOf = (content: ChatMessage['content']): string =>
+    typeof content === 'string'
+      ? content
+      : content.filter((p) => p.type === 'text' && p.text).map((p) => String(p.text)).join('\n');
+  const sysMsg = history.find((m) => m.role === 'system');
+  const system = opts.system ?? (sysMsg ? textOf(sysMsg.content) : undefined);
+  const turns = history
+    .filter((m) => m.role !== 'system')
+    .map((m) => `${m.role}: ${textOf(m.content)}`)
+    .join('\n')
+    .slice(-6000);
+  const params = new URLSearchParams({ model: config.model });
+  if (system) params.set('system', system);
+  const fail = (error: string): Completion => ({ text: '', provider: config.provider, model: config.model, error });
+
+  let response: Response;
+  try {
+    response = await fetchTimeout(`${base}/${encodeURIComponent(turns)}?${params}`, { method: 'GET' }, opts.timeoutMs);
+  } catch (error) {
+    const message = (error as Error).name === 'AbortError'
+      ? `pollinations: timed out after ${opts.timeoutMs}ms`
+      : `pollinations: ${(error as Error).message}`;
+    return fail(message);
+  }
+  if (response.status === 429) {
+    return fail('pollinations: HTTP 429 (rate limited — the free tier caps per-minute requests)');
+  }
+  if (!response.ok) {
+    return fail(`pollinations: HTTP ${response.status}`);
+  }
+  const body = (await response.text()).trim();
+  // `{}` is what the endpoint returns under load instead of text. Treating it
+  // as a reply would send punctuation to the chat; the retry loop gets a turn.
+  if (!body || body === '{}') {
+    return fail('pollinations: empty response');
+  }
+  return { text: body, provider: config.provider, model: config.model };
+}
+
 async function openaiCompatible(
   base: string,
   config: ProviderConfig,
@@ -772,6 +848,28 @@ async function openaiCompatible(
       provider: config.provider,
       model: config.model,
       error: json.error?.message ?? `HTTP ${response.status}`,
+    };
+  }
+
+  // **A 200 with an error body and no choices is a failure, not an empty reply.**
+  //
+  // The free tier reports both a transient upstream overload and a rate limit
+  // this way — observed live as `{"error":{"message":"Upstream error from
+  // Nvidia: Service temporarily overloaded","code":503}}` under an HTTP 200.
+  // Reading that as `empty response` threw away the provider's own words, so the
+  // message the operator saw named neither the cause nor the remedy — and, worse,
+  // a body carrying `free-models-per-min` was classified as a generic empty
+  // response, which `complete()` retries three times. Retrying a hard per-minute
+  // cap is the one thing that makes the next window longer.
+  //
+  // Surfacing the body verbatim lets `isRateLimited()` and
+  // `isTransientUpstream()` see what the provider actually said.
+  if (json.error && !json.choices?.length) {
+    return {
+      text: '',
+      provider: config.provider,
+      model: config.model,
+      error: json.error.message ?? `provider error (HTTP ${response.status})`,
     };
   }
 
@@ -992,11 +1090,13 @@ async function gemini(
  */
 function echoCompletion(model: string, history: ChatMessage[]): Completion {
   const lastUser = [...history].reverse().find((m) => m.role === 'user');
-  const facts = history.find((m) => m.role === 'system')?.content ?? '';
+  const lastUserText = typeof lastUser?.content === 'string' ? lastUser.content : '';
+  const factsRaw = history.find((m) => m.role === 'system')?.content;
+  const facts = typeof factsRaw === 'string' ? factsRaw : '';
 
   const hasMemory = /Known facts about this user/.test(facts);
   const lines = [
-    lastUser ? `You said: ${lastUser.content}` : 'No user message received.',
+    lastUser ? `You said: ${lastUserText}` : 'No user message received.',
     hasMemory ? 'I have remembered facts about you.' : 'I have no remembered facts yet.',
     '(echo provider — deterministic, no model involved.)',
   ];

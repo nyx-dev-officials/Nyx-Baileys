@@ -1,21 +1,36 @@
-import makeWASocket, { fetchLatestWaWebVersion } from '@whiskeysockets/baileys';
+import makeWASocket, { Browsers, fetchLatestWaWebVersion } from '@whiskeysockets/baileys';
 
 import type { CoreSocket, Logger, SuperOptions } from '../utils/types.js';
 
 /**
- * Desktop Chrome fingerprint — the default identity.
+ * Canonical desktop fingerprint — the default identity.
  *
- * This is a *consistent* fingerprint, not a randomised one. Baileys already
- * sends a desktop profile; the only thing that matters is that the tuple is a
- * real, internally-consistent Chrome-on-Windows combination and stays constant
- * for the life of the socket. Churning it per connection is what looks
- * anomalous, because one browser does not change OS mid-session.
+ * This is Baileys' own `Browsers.ubuntu('Chrome')`, currently
+ * `['Ubuntu', 'Chrome', '22.04.4']`, rather than a hand-written tuple. Two
+ * measured reasons, both about what the server accepts rather than what looks
+ * plausible:
+ *
+ * 1. The pairing-code handshake carries `companion_platform_display` derived
+ *    from this tuple as `` `${browser[1]} (${browser[0]})` ``. A hand-written
+ *    `['Chrome', '120', '0']` sent `display='120 (Chrome)'` with platform id 9
+ *    (`OTHER_WEB_CLIENT`). WhatsApp's stricter `companion_hello` validator
+ *    answers that with an async 400 bad-request *after* Baileys has already
+ *    returned the 8-digit code — so codes generate cleanly and the phone rejects
+ *    every one of them ("couldn't link device"). The canonical tuple sends
+ *    `display='Chrome (Ubuntu)'` with platform id 1 (`CHROME`), which the
+ *    validator accepts. Upstream PR #2559 documents the same failure and fix.
+ *
+ * 2. `webSubPlatform` stays `WEB_BROWSER`: rc14 only selects anything else when
+ *    `syncFullHistory` is on *and* the OS is a `PLATFORM_MAP` key (`Mac OS` or
+ *    `Windows`). `Ubuntu` is not a key, so the WIN32/428 handshake death the
+ *    guard below exists for cannot trigger from this default.
+ *
+ * The tuple stays constant for the life of the socket — churning identity
+ * mid-session is what looks anomalous, because one browser does not change OS
+ * mid-session. Sourced from the helper rather than copied so it tracks Baileys
+ * when upstream bumps the version string.
  */
-export const DEFAULT_BROWSER: readonly [string, string, string] = [
-  'Chrome',
-  '120',
-  '0',
-];
+export const DEFAULT_BROWSER: readonly [string, string, string] = Browsers.ubuntu('Chrome');
 
 /**
  * Reject browser tuples the server closes on, before the socket dies.
@@ -42,7 +57,7 @@ export const DEFAULT_BROWSER: readonly [string, string, string] = [
  *   && config.browser[1] === 'Desktop'
  * ```
  *
- * `DEFAULT_BROWSER` is `['Chrome','120','0']` — `'Chrome'` is not a key, so
+ * `DEFAULT_BROWSER` is `['Ubuntu','Chrome',…]` — `'Ubuntu'` is not a key, so
  * `webSubPlatform` stays `WEB_BROWSER` and pairs fine. The hazard appears only
  * when a caller opts into `Browsers.windows('Desktop')` together with
  * `syncFullHistory`, which is exactly what someone would do to request full
@@ -57,12 +72,12 @@ export function assertBrowserIsSafe(
   if (browser[1] !== 'Desktop') return;
 
   if (browser[0] === 'Windows') {
-    throw new Error(
-      'browser "Windows/Desktop" with syncFullHistory advertises webSubPlatform=WIN32, '
-      + 'which WhatsApp rejects with a 428 before any QR is emitted. Use the default '
-      + 'Chrome/WEB_BROWSER tuple for full history sync, or upgrade past rc14 where '
-      + 'upstream maps Windows to WIN_HYBRID.',
-    );
+      throw new Error(
+        'browser "Windows/Desktop" with syncFullHistory advertises webSubPlatform=WIN32, '
+        + 'which WhatsApp rejects with a 428 before any QR is emitted. Use the default '
+        + 'Ubuntu/Chrome tuple for full history sync, or upgrade past rc14 where '
+        + 'upstream maps Windows to WIN_HYBRID.',
+      );
   }
 }
 
@@ -212,11 +227,29 @@ export async function createCoreSocket(args: CreateSocketArgs): Promise<CoreSock
   return sock as CoreSocket;
 }
 
-/** Chrome UA string matching the fingerprint tuple. */
+/**
+ * Display UA string for the fingerprint tuple.
+ *
+ * Display-only: it is printed on connect and stored on `__identity`, never sent
+ * on the wire (the protocol UserAgent is built by Baileys from the WA version).
+ * The tuple layout is `[os, engine, osVersion]` — an earlier revision read it as
+ * `[engine, version]` and, once the default became Ubuntu/Chrome, emitted the
+ * nonsense `Ubuntu/Chrome.0.0.0`. The Chrome release below is pinned, not
+ * detected; it only needs to be a real release line, since nothing parses it.
+ */
+const OS_PLATFORM_TOKENS: Record<string, string> = {
+  Ubuntu: '(X11; Linux x86_64)',
+  'Mac OS': '(Macintosh; Intel Mac OS X 10_15_7)',
+  Windows: '(Windows NT 10.0; Win64; x64)',
+};
+
+const PINNED_CHROME_RELEASE = '120.0.0.0';
+
 export function desktopUserAgent(browser: readonly [string, string, string] = DEFAULT_BROWSER): string {
-  const [engine, version] = browser;
+  const [os, engine] = browser;
+  const platform = OS_PLATFORM_TOKENS[os ?? ''] ?? '(X11; Linux x86_64)';
   return (
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 ' +
-    `(KHTML, like Gecko) ${engine}/${version}.0.0.0 Safari/537.36`
+    `Mozilla/5.0 ${platform} AppleWebKit/537.36 ` +
+    `(KHTML, like Gecko) ${engine}/${PINNED_CHROME_RELEASE} Safari/537.36`
   );
 }

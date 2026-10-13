@@ -87,7 +87,7 @@ process.exit(0);                                   // or the process hangs
 | Permissions | One chat cannot read another's memory; no cross-chat leakage |
 | Device | **The operator's actual phone.** Not a resized browser |
 | Accessibility | Limited — see below |
-| Regression | `npm test` stays green at 1288; export targets stay at 27 |
+| Regression | `npm test` stays green at 1365; export targets stay at 27 |
 
 **Accessibility:** there is no UI to audit for keyboard or focus. What applies is that rendered structures are native WhatsApp UI, so the client handles a11y. This is a genuine limitation, stated rather than ticked.
 
@@ -102,7 +102,7 @@ npm test                          # node:test
 node scripts/check-exports.mjs    # 27 export targets
 ```
 
-Current: `0` errors · `1288 pass / 0 fail` · `27` targets.
+Current: `0` errors · `1365 pass / 0 fail` · `27` targets.
 
 ### Tests that exist because they caught something
 
@@ -130,8 +130,8 @@ A fake socket **accepts any object**. It proves argument order and never return 
 | M2 | `verifiedSpoof` does not suppress | OFF/ON control, separate connection | ✅ `VC123543` |
 | M3 | Seven typography faces render | send all seven | ✅ `FD122327` — user rated 10/10 |
 | M4 | Poll arrives | send marked poll | ⚠️ sent, arrival unconfirmed |
-| M5 | **Menu arrives** | send marked menu | ❌ **`single_select` never arrives on consumer accounts** |
-| M6 | Menu tap round-trips | tap a row, confirm reply routes | ❌ blocked by M5 |
+| M5 | **Menu arrives** | send marked menu | ⚠️ **unresolved** — `AGENTS-FIX-QUEUE.md` §5-6 measured it never arriving; `docs/VERIFICATION.md` retracts that and reports it rendering. They contradict each other |
+| M6 | Menu tap round-trips | tap a row, confirm reply routes | ❌ **never observed** — no tap has ever come back from a real phone |
 | M7 | Poll vote routes back | vote, confirm reply | ⚠️ unconfirmed |
 | M8 | Button tap round-trips | tap, confirm reply | ⚠️ unconfirmed |
 | M9 | Tracked typography is readable | user reads it aloud | ✅ via M3 |
@@ -171,8 +171,44 @@ Do not ship with any open:
 
 ## 10. Honest status
 
-**Verified:** build, typecheck, 1288 assertions, 27 exports, pacing, typography, image/audio-less media paths, `verifiedSpoof` non-suppression.
+**Verified:** build, typecheck, 1365 assertions, 27 exports, pacing, typography, image/audio media paths (`compressAudio` and `optimizeForWhatsApp` now transcode for real), `verifiedSpoof` non-suppression.**Unverified and known broken:** menu delivery and tap round-trip (disputed — see
+M5/M6); poll/button tap round-trips; group-context `single_select`; every
+non-`quick_reply` interactive flow.
 
-**Unverified and known broken:** menu delivery and tap round-trip; `compressAudio`; `optimizeForWhatsApp`; vision end-to-end; contextual tone; transcript persistence; poll/button tap round-trips; group-context `single_select`; every non-`quick_reply` interactive flow.
+**Fixed and regression-tested on 2026-10-08, against real files and stubbed
+providers:** `compressAudio` and `optimizeForWhatsApp` now produce real media;
+vision parts travel instead of `"[object Object]"`; tone context reaches the
+prompt; transcripts persist and rehydrate. What is verified is the *code path* —
+on-device rendering of menus and flows still is not.
+
+**New — the feature menu.** `featureMenu`/`sendFeatureMenu` (in
+`src/toolkit/feature-menu.ts`) build the `single_select` sheet whose rows are
+Call / URL / Quick Reply / Copy, and the example bot's `/menu` sends it, dispatches
+taps to a per-feature example, and falls back to text. `tests/feature-menu.test.js`
+asserts the payload shape (row key is `id`, not `rowId`), the id round-trip, and
+the fallback. Rendering it on a phone is the *same* unverified native-flow question
+logged at M5/M6 — the builder is proven, the delivery is not.
+
+**The rows are derived, not written.** The menu intersects the interactive
+plugin's flow registry (`NATIVE_FLOW_NAMES`, now a runtime array so it can be read
+at runtime rather than restated) with a sender registry (`FLOW_SENDERS`) naming the
+exported function that sends each flow. A flow with no sender cannot reach the menu,
+which is how `Location Request` — a row that shipped with nothing behind it — was
+removed. The suite asserts the derivation: every sender name resolves to a real
+callable, every row is backed by one, and every declared flow is accounted for in
+exactly one bucket (menu, excluded, unlabelled, or unsendable) so nothing can be
+silently dropped.
+
+**`interactiveButtons` — the reference calling convention.**
+`refs/atex-ovi__wabase-button` (the repo behind the menu screenshot) sends buttons
+as `sock.sendMessage(jid, { text, title, subtitle, footer, interactiveButtons: [{
+name, buttonParamsJson }] })`. That content key is now handled by the interactive
+plugin. The stanza's `native_flow` name is **not** read off the payload: it is the
+fixed literal `mixed` with `v='9'`, and the tests assert that constant rather than
+the button's flow. An earlier revision of these tests asserted the opposite —
+`name === the button's flow` — and passed for weeks while every interactive send
+arrived on a phone without its button. The reference's own payload is asserted
+verbatim in `tests/interactive.test.js`, and as of 2026-10-09 a rendered menu has
+been confirmed on hardware.
 
 **Unverified, unknown size:** 395 exports in `src/features/` minus the five defects found. Phase 4 exists to close this.

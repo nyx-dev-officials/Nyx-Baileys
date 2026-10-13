@@ -38,7 +38,7 @@ The end state — **Flux** — is that framework plus a WhatsApp-native AI agent
 | Core | `@whiskeysockets/baileys` **rc14** | Installed **and** registry-latest. Upstream `master` has an unpublished `WIN32 → WIN_HYBRID` fix; `assertBrowserIsSafe()` guards the known rc14 428. |
 | Runtime | Node ≥ 20 (local v24.19.0) | |
 | Language | TypeScript, `strict`, ESM | `node16`/`nodenext` resolution — relative imports need explicit `.js` |
-| Tests | `node:test` | 1288 assertions, 0 failures |
+| Tests | `node:test` | 1365 assertions, 0 failures |
 | Media | `sharp` (libvips 8.18.7) + system `ffmpeg` | Both required by `media.ts`. ffmpeg at `C:/Users/bian/bin/ffmpeg` |
 | AI | OpenRouter free tier, Anthropic, Gemini, Groq, Ollama, echo | Free models probed live; see §6 |
 | Typography | Unicode mathematical/small-cap lettersets + tracking | No font files. WhatsApp has no font selection. |
@@ -85,7 +85,7 @@ Written as observable behaviour.
 - [x] `sendList` never emits `listMessage`, which rc14's `generateWAMessage` cannot send at all.
 - [x] `pinMessage` sends `{ pin: <key>, type: n }` as siblings; the nested shape is dropped by protobuf.
 - [x] `searchMessages` and `getMessageInfo` **throw** rather than return a plausible empty result. rc14 exposes no such API.
-- [ ] **`sendList` does not yet render.** It routes to `sendCategoryMenu()` → `single_select`, which `AGENTS-FIX-QUEUE.md` §5-6 measured as **never arriving on this consumer account**. Arrival unverified. **This is the highest-priority defect.**
+- [ ] **`sendList` rendering is disputed, not merely unverified.** `AGENTS-FIX-QUEUE.md` §5-6 measured `single_select` never arriving; `docs/VERIFICATION.md` retracts that and reports the menu rendering once the row key was corrected to `id`. Both measured 2026-10-05. **A tap has never been observed coming back from a phone.** One operator-confirmed tap settles it — do not quote the Business-tier-gate claim as settled.
 - [ ] `cta_url`, `cta_copy`, `cta_call` on a consumer account — server-whitelisted, never sent from this account.
 - [ ] `single_select` in a **group** — never tested, only 1:1.
 - [ ] `templateMessage`, `carouselMessage`, `collectionMessage`, `productMessage`, `contactMessage` — never confirmed rendering.
@@ -99,9 +99,9 @@ Written as observable behaviour.
 - [x] `trimMedia` cuts container-aware via ffmpeg `-ss/-to -c copy`, verified with `ffprobe` on a real MP4.
 - [x] ffmpeg availability is probed; a missing binary **throws**. No byte-level fallback, deliberately.
 - [x] Codec output is verified non-empty rather than trusting the exit code.
-- [ ] **`compressAudio` still gzips its input to `.compressed.gz`.** Not audio. Returns a plausible ratio.
-- [ ] **`optimizeForWhatsApp` is worse.** Gzips the bytes, keeps the **original extension**, and returns `whatsappReady: true` with `mimeType: 'video/mp4'`. A file guaranteed to be rejected, certified ready.
-- [ ] WhatsApp's actual size/dimension limits are not enforced anywhere.
+- [x] `compressAudio` transcodes with a real codec via ffmpeg, clamped bitrate/sample rate, refuses a non-audio input. Decodability asserted with `ffprobe` on a generated WAV (`tests/media-real.test.js`).
+- [x] `optimizeForWhatsApp` transcodes images/stickers via sharp and video/audio via ffmpeg, derives the output extension from the produced format, and **computes** `whatsappReady` from the real output size against the real ceiling.
+- [ ] WhatsApp's size/dimension ceilings are enforced in `optimizeForWhatsApp`, but not centrally for every send path.
 
 ### 4.6 Privacy and group moderation — **needs the user's decision**
 
@@ -120,9 +120,9 @@ Written as observable behaviour.
 - [x] Scoped memory: `s1` and `s2` isolated; durable user facts atomic and user-scoped; path-traversal safe.
 - [x] Identity: name `Flux`, role `flux developer`, owner answer returns `+62 838-3145-9585`, typography sanitizer.
 - [x] Multimodal preparation refuses to invent audio/document contents.
-- [ ] **Vision is broken end to end.** `engine.ts` wraps `prepareForModel()` in `String(...)`, so a `ContentPart[]` becomes `"[object Object]"`. The standalone helper passes tests; the engine path was never exercised.
-- [ ] `toneForContext()` exists but the engine never passes language/question/length context, so contextual tone collapses to one default.
-- [ ] `DurableMemory` persists **facts, not transcripts.** Full conversation context does not survive logout/unpair.
+- [x] **Vision carries parts end to end.** The `String(...)` wrapper is gone; parts reach an OpenAI-compatible provider verbatim and are flattened for one that cannot take them. Asserted on a captured request body (`tests/ai-turn-fixes.test.js`). Rendered output still needs a vision-capable model — the free tier has none.
+- [x] `toneForContext()` is reached: the engine passes language, tone and length, and `debugContext()` derives the same tone from the same helper.
+- [x] **Transcripts persist**, not only facts. `DurableMemory` writes a bounded per-chat transcript atomically and the engine rehydrates it on the next boot.
 - [ ] `made by Nyx` footer is implemented but **defaults off**; the user asked for it on every reply.
 - [ ] No verified **free** vision model exists. Current free model is text-only.
 
@@ -146,10 +146,10 @@ Written as observable behaviour.
 
 - [x] `npm run check` clean under TypeScript `strict`.
 - [x] `npm run build` clean.
-- [x] `npm test` — 1288 pass / 0 fail.
+- [x] `npm test` — 1365 pass / 0 fail.
 - [x] No key-shaped string anywhere in the tracked tree; verified by scan before every commit this session.
 - [x] Bot identity and timing are treated as fingerprint-relevant: jitter is non-uniform and actions bypass pacing.
-- [ ] **No public API changed without a CHANGELOG entry.** `createEdit`'s signature changed in `0ece183` and was never documented — the old call form silently yields `undefined` rather than a compile error.
+- [x] **No public API changed without a CHANGELOG entry.** `createEdit`'s signature change is documented under **Breaking** in `CHANGELOG.md` for 0.3.1, including the failure mode: the old call form yields `undefined` rather than a compile error.
 - [ ] No error monitoring. A send failure in production is a line in stdout.
 - [ ] No performance budget. Untested under message burst.
 - [ ] Not published. `v0.3.1` → `9c2ce9e`, **11 commits behind `main`**. Do not move the tag or cut `0.3.2` without asking.
@@ -210,4 +210,11 @@ Surfaced by step 2 of the vibe-docs-guide workflow — "list contradictions befo
 5. **`createEdit`'s signature change is undocumented** in `CHANGELOG.md` despite being public surface with a silent-failure failure mode.
 6. **Commit `357d0ba`'s message claims "verified against real files, not mocks."** True of the media work; misleading by proximity for the `sendList` half of the same commit, which remains unverified. Commit messages are documentation — fix it or append a correction.
 
-Items 1–5 are doc-vs-measurement drift and are enumerated with exact line numbers in `AGENTS-FIX-QUEUE.md`. Item 6 is this session's own error.
+**Resolved 2026-10-08.** Items 1–5 are corrected in the documents themselves: `HOW-IT-WORKS.md` now marks `single_select` **disputed** rather than dead, `VERIFICATION.md` §4 and `ARCHITECTURE.md` §5.6 carry the correct edit shape, the `adapters/` subsystem is gone from `ARCHITECTURE.md` and `FEATURES.md`, the flow-form parser reads COVERED, and `createEdit`'s breaking change is documented under **Breaking** in `CHANGELOG.md` for 0.3.1. `AGENTS-FIX-QUEUE.md` now carries a status table at the top so its historical measurements are not mistaken for open work.
+
+Item 6 is unfixable and stays visible on purpose: a commit message is history, and `357d0ba`'s claim is true of its media half and misleading for its `sendList` half. The correction lives here and in `AGENTS-FIX-QUEUE.md`. Commit messages are documentation — write them like it.
+
+**One contradiction remains open, and it is item 1's cousin:** whether
+`single_select` arrives at all on a consumer account. `AGENTS-FIX-QUEUE.md` §5-6
+and `docs/VERIFICATION.md` measured opposite outcomes on the same day. No
+document can settle it; one operator-confirmed tap on a marked menu can.

@@ -280,6 +280,19 @@ export async function handleTurn(
  * script is `sock.ev.on('messages.upsert', …) → engine.respond(…)` — the wiring
  * is four lines, and none of the judgement lives there.
  */
+/**
+ * The tone id for a message, from the same signals the turn uses.
+ *
+ * One function, called by both `think()` and `debugContext()`. Deriving it twice
+ * is how the debugging view reported a tone the turn had not sent — the same
+ * class of defect as a debug tool that rebuilds the prompt differently.
+ */
+function toneIdFor(text: string): string | undefined {
+  const tone = readTone(text);
+  if (tone.frustrated) return 'steady';
+  return tone.sentiment === 'positive' ? 'warm' : undefined;
+}
+
 export class BotEngine {
   readonly convs: Conversations;
 
@@ -307,6 +320,43 @@ export class BotEngine {
    */
   private sessionOf(jid: string): string {
     return this.config.sessionId ?? sessionKey(jid, 'default');
+  }
+
+  /** Chats whose persisted transcript has been loaded this process. */
+  private hydrated = new Set<string>();
+
+  /**
+   * Load a chat's persisted transcript once per process.
+   *
+   * Only active when a durable memory store is configured. Facts alone were not
+   * enough: a user who un-paired and re-paired lost every turn while the bot
+   * still "remembered" what they had told it. The transcript is the other half,
+   * and without it "full context does not survive logout" was literal.
+   */
+  private hydrate(jid: string, chatId: string): void {
+    if (!this.scoped || this.hydrated.has(chatId)) return;
+    this.hydrated.add(chatId);
+
+    const stored = this.config.memory?.transcript(jid, this.sessionOf(jid)) ?? [];
+    const chat = this.convs.get(chatId);
+    if (stored.length === 0 || chat.messages.length > 0) return;
+    chat.messages.push(...stored);
+  }
+
+  /**
+   * Persist a chat's transcript.
+   *
+   * A failed write costs a history turn, not the reply the user is owed, so the
+   * error is contained rather than propagated into the turn.
+   */
+  private persist(jid: string, chatId: string): void {
+    if (!this.scoped) return;
+    try {
+      this.config.memory?.saveTranscript(jid, this.sessionOf(jid), this.convs.get(chatId).messages);
+    } catch {
+      // Deliberately swallowed: a transcript that cannot be written is lost
+      // history, and turning that into a failed reply would be strictly worse.
+    }
   }
 
   /** Remember a fact durably — survives disconnect and re-pairing. */
@@ -405,6 +455,7 @@ export class BotEngine {
     const tone = base.tone;
     const language = base.language;
     const chatId = Conversations.keyFor(jid);
+    this.hydrate(jid, chatId);
 
     // A tap on a poll or menu arrives as a reply, not a new instruction.
     const selection = readSelection(message);
@@ -496,6 +547,15 @@ export class BotEngine {
       ...(this.config.persona ? { persona: this.config.persona } : {}),
       ...(this.config.purpose ? { purpose: this.config.purpose } : {}),
       ...(this.config.tools ? { tools: this.config.tools } : {}),
+      // Real context, so the tone is derived from *this* message. The engine has
+      // always computed language and tone and then never passed them, which made
+      // `toneForContext()` dead code and collapsed every reply to one default.
+      context: {
+        lang: language,
+        tone: toneIdFor(text),
+        isQuestion: intent.kind === 'question' || intent.kind === 'help',
+        wordCount: text.trim() ? text.trim().split(/\s+/).length : 0,
+      },
     });
 
     const window = this.config.ai.contextWindow ?? 8192;
@@ -550,20 +610,22 @@ export class BotEngine {
         ? [this.config.ai, ...this.config.aiFallbacks]
         : [this.config.ai];
 
-      const round = media.length > 0 && transcript.at(-1)
+      // A vision turn replaces the newest user message with content parts. The
+      // previous version wrapped that in `String(...)`, which turned a
+      // `ContentPart[]` into the literal `"[object Object]"` before it reached the
+      // provider — the image never travelled. Parts are passed through here and
+      // flattened per-provider inside `complete()`.
+      const last = transcript.at(-1);
+      const round = media.length > 0 && last && typeof last.content === 'string'
         ? [
           ...transcript.slice(0, -1),
           {
-            ...(transcript.at(-1) as ChatMessage),
-            // Kept as a string here; the provider path converts it. This keeps the
-            // fallback chain provider-agnostic.
-            content: String(
-              prepareForModel(
-                (transcript.at(-1) as ChatMessage).content,
-                media,
-                chain[0]?.provider ?? this.config.ai.provider,
-                chain[0]?.model ?? this.config.ai.model,
-              ),
+            ...last,
+            content: prepareForModel(
+              last.content,
+              media,
+              chain[0]?.provider ?? this.config.ai.provider,
+              chain[0]?.model ?? this.config.ai.model,
             ),
           },
         ]
@@ -658,6 +720,10 @@ export class BotEngine {
   async respond(sock: AnySock, jid: string, message: any): Promise<TurnResult & { sent: boolean }> {
     const turn = await this.think(sock, jid, message);
 
+    // Persist before sending: the conversation happened whether or not the wire
+    // accepts the reply, and `think()` has already recorded both turns.
+    this.persist(jid, Conversations.keyFor(jid));
+
     if (turn.action === 'silent' || !turn.text) return { ...turn, sent: false };
 
     // Formatting hygiene runs here, on the way out, so a bad marker from any
@@ -732,7 +798,12 @@ export class BotEngine {
 
   /** Wipe a chat's history and memory. The `/reset` path. */
   reset(jid: string): boolean {
-    return this.convs.drop(Conversations.keyFor(jid));
+    const chatId = Conversations.keyFor(jid);
+    this.hydrated.delete(chatId);
+    // The durable transcript must go too, or the next turn hydrates the history
+    // this call just deleted.
+    if (this.scoped) this.config.memory?.purgeTranscript(jid, this.sessionOf(jid));
+    return this.convs.drop(chatId);
   }
 
   /** Drop flows that timed out. Call on an interval. */
@@ -778,11 +849,22 @@ export class BotEngine {
     // and the tool list as all absent — which reads as "the prompt is broken"
     // when in fact the caller just was not shown the part that is assembled
     // per-request. That is a debugging tool that misleads while debugging.
+    //
+    // The context is rebuilt here too, so the tone shown is the tone that was
+    // sent rather than the default a caller would otherwise be shown.
+    const lastUser = [...chat.messages].reverse().find((m) => m.role === 'user');
+    const lastText = typeof lastUser?.content === 'string' ? lastUser.content : '';
     const system = systemPrompt({
       chat: { jid, isGroup: jid.endsWith('@g.us') },
       ...(this.config.persona ? { persona: this.config.persona } : {}),
       ...(this.config.purpose ? { purpose: this.config.purpose } : {}),
       ...(this.config.tools ? { tools: this.config.tools } : {}),
+      context: {
+        lang: detectLanguage(lastText),
+        tone: toneIdFor(lastText),
+        isQuestion: lastText.includes('?'),
+        wordCount: lastText.trim() ? lastText.trim().split(/\s+/).length : 0,
+      },
     });
 
     return {

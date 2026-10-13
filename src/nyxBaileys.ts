@@ -2,7 +2,7 @@ import { DisconnectReason } from '@whiskeysockets/baileys';
 
 import { Disposables, invariant } from './core/intercept.js';
 import { createCoreSocket, resolveWebVersion, type SocketTuning } from './core/socket.js';
-import { FileSessionStore } from './core/session-store.js';
+import { FileSessionStore, SerialSaver } from './core/session-store.js';
 import { createLogger } from './utils/logger.js';
 import type { CoreSocket, Logger, Plugin, SuperOptions } from './utils/types.js';
 
@@ -20,6 +20,8 @@ import { mediaStreamer } from './plugins/media-stream.js';
 import { autoReconnect } from './plugins/reconnect.js';
 import { sessionRepair } from './plugins/session-repair.js';
 import { verifiedSpoof } from './plugins/Verified.js';
+import { adReply } from './plugins/ad-reply.js';
+import { selfClean } from './plugins/self-clean.js';
 
 /**
  * Nyx-Baileys.
@@ -42,13 +44,28 @@ export class NyxBaileys {
 
   /** Plugins that actually applied, in application order. */
   readonly applied: string[] = [];
+  /**
+   * The same plugins with their execution order, for display.
+   *
+   * `applied` is only names because that is all the existing callers need. A
+   * dashboard wants the order too, and re-calling `plugins()` to get it would
+   * construct a *second* set of plugin instances with different closures — so
+   * the objects are recorded as they are applied.
+   */
+  readonly chain: Array<{ name: string; order: number }> = [];
 
   #disposables = new Disposables();
   #connecting: Promise<CoreSocket> | null = null;
-  /** Tail of the serialised creds-save chain. `dispose()` awaits it. */
-  #pendingSave: Promise<void> = Promise.resolve();
+  /** Queued credential writes. Rebuilds and dispose drain it before reading state. */
+  #saver = new SerialSaver();
   #closed = false;
+  /** Most recent pairing ref from Baileys. Retained so a late subscriber can still draw it. */
+  #lastQr: string | null = null;
+
   #lastConnection: { at: number; state: string } = { at: 0, state: 'never' };
+
+  /** Last observed close code, if any. Instance-level so it survives rebuilds. */
+  #lastClose: { code: number | null; at: number } | null = null;
 
   constructor(options: SuperOptions = {}) {
     this.options = options;
@@ -62,12 +79,16 @@ export class NyxBaileys {
     const o = this.options;
     return [
       stealth(),        // 10  identity + tuning
-      // Explicitly on. This plugin was suspected of suppressing its own
-      // messages for weeks (CONTEXT.md §6.1); that is now disproven — see the
-      // resolution note there. Written as `enabled: true` rather than relying on
-      // an undefined default so the intent is greppable, since the plugin is
-      // opt-*out* and its absence from this line would be silent.
-      verifiedSpoof({ enabled: true }),  // 12  default green checkmark interceptor
+      // `verifiedSpoof` (12) is OUT of the default chain as of this change. It
+      // fabricates a `status@broadcast` quote on every send and `CONTEXT.md` §6.1
+      // still has it open on phantom delivery; running the real ad card next to an
+      // unexplained drop is how you end up blaming the wrong plugin. It is still
+      // exported — register it deliberately with `client.registerPlugin()` if you
+      // want the spoof, and expect the caveat.
+      //
+      // 13  native ad card on every outgoing message. Runs after 12 so it sits
+      // outside it and adds `thumbnail` without touching what 12 already set.
+      adReply(o.adReply),
       clockSync(),      // 15  server clock estimate
       lidRouter(),      // 20  target resolution
       mediaStreamer(),  // 30  download path
@@ -78,6 +99,7 @@ export class NyxBaileys {
       autoReconnect(),  // 70  self-healing backoff
       antiSpam(o.antiSpam),   // 80  pacing queue
       delivery(),       // 85  delivery-rate tracking
+      selfClean(),      // 90  sendAndClean: drop the sender-side copy
       flowEngine(),     // 90  conversational routing
       warmup(o.warmupDays),   // 100 rate ramp
     ];
@@ -117,12 +139,9 @@ export class NyxBaileys {
     const { state, saveCreds } = await store.init();
     await resolveWebVersion().catch(() => undefined);
 
-    let pending: Promise<void> = Promise.resolve();
-    const saveCredsSerialised = (): Promise<void> => {
-      pending = pending.then(() => saveCreds()).catch(() => undefined);
-      return pending;
-    };
-    this.#pendingSave = pending;
+    // Every save — from this connection and any later rebuild — feeds one
+    // shared serial queue, so a rebuild can always drain to the latest write.
+    const saveCredsSerialised = (): Promise<void> => this.#saver.run(saveCreds);
 
     const tuning = this.#tuning();
     const sock = await createCoreSocket({
@@ -153,10 +172,20 @@ export class NyxBaileys {
     if (this.#closed) return false;
     if (this.#connecting) return true;
 
+    // Drain queued credential writes BEFORE re-reading from disk. After a
+    // successful pairing the server sends 515 almost immediately; rebuilding
+    // from a creds.json that does not yet contain the paired state resurrects
+    // an unregistered socket, and the phone — which just completed its side —
+    // reports the link as failed. This was observed as: registered=true on the
+    // old socket, phone error, and a null user on the rebuilt one.
+    await this.#saver.drain();
+
     this.log.info('rebuilding socket');
     this.#disposables.dispose();
     this.#disposables.reset();
     this.applied.length = 0;
+    this.chain.length = 0;
+    this.#lastQr = null;
 
     try {
       this.sock?.end?.(undefined);
@@ -194,6 +223,7 @@ export class NyxBaileys {
       try {
         await plugin.apply(pluginCtx as never);
         this.applied.push(plugin.name);
+        this.chain.push({ name: plugin.name, order: plugin.order });
         this.log.debug('plugin applied', { plugin: plugin.name });
       } catch (err) {
         this.log.error('plugin failed to apply', {
@@ -206,9 +236,37 @@ export class NyxBaileys {
 
   /** Watch connection state; hand disconnects to the reconnect plugin. */
   #wireConnection(sock: CoreSocket): void {
-    sock.ev.on('connection.update', (update: { connection?: string }) => {
+    sock.ev.on('connection.update', (update: {
+      connection?: string;
+      qr?: string;
+      lastDisconnect?: { error?: unknown; date?: unknown };
+    }) => {
+      // Capture the pairing ref here rather than letting callers listen for it.
+      //
+      // The first ref lands about 1.1s after this handler is attached, which is
+      // long before an interactive prompt finishes asking for a number and a
+      // method. A caller that subscribes later misses it entirely and then waits
+      // for the next rotation — roughly 20 seconds of an empty terminal, which
+      // reads as a hang. Retaining the ref makes the value available whenever
+      // the caller is finally ready to draw it.
+      if (update.qr) this.#lastQr = update.qr;
+
       const phase = update.connection;
       this.#lastConnection = { at: Date.now(), state: phase ?? 'unknown' };
+      if (phase === 'close') {
+        // Baileys reports the reason nested in lastDisconnect, not in the
+        // top-level statusCode the close branch below reads (which is always
+        // undefined on real updates). Recorded separately and instance-level so
+        // it survives rebuilds, unlike every ev-based listener. Plain Errors
+        // carry no code and read as null rather than throwing.
+        const output = (update.lastDisconnect?.error as {
+          output?: { statusCode?: unknown };
+        } | null | undefined)?.output;
+        this.#lastClose = {
+          code: typeof output?.statusCode === 'number' ? output.statusCode : null,
+          at: Date.now(),
+        };
+      }
 
       switch (phase) {
         case 'open':
@@ -266,6 +324,35 @@ export class NyxBaileys {
     };
   }
 
+  /**
+   * The most recent pairing ref, or null if none has arrived.
+   *
+   * Retained because Baileys emits each ref roughly once per rotation. A UI that
+   * subscribes after the fact — which an interactive prompt always does — would
+   * otherwise wait for the next rotation before it had anything to draw.
+   */
+  get lastQr(): string | null {
+    return this.#lastQr;
+  }
+
+  /** Resolves with the current ref, waiting for one if none has arrived yet. */
+  async waitForQr(timeoutMs = 30_000): Promise<string> {
+    const existing = this.#lastQr;
+    if (existing) return existing;
+    return new Promise<string>((resolve, reject) => {
+      const timer = setTimeout(
+        () => { off(); reject(new Error(`no pairing ref within ${timeoutMs}ms — is the session already linked?`)); },
+        timeoutMs,
+      );
+      const off = this.on<{ qr?: string }>('connection.update', (u) => {
+        if (!u.qr) return;
+        clearTimeout(timer);
+        off();
+        resolve(u.qr);
+      });
+    });
+  }
+
   get ev(): CoreSocket['ev'] {
     return this.sock.ev;
   }
@@ -276,6 +363,18 @@ export class NyxBaileys {
 
   get connectionState(): { at: number; state: string } {
     return { ...this.#lastConnection };
+  }
+
+  /**
+   * Last observed disconnect status code, if any socket has reported one.
+   *
+   * The reconnect plugin classifies closes from fields Baileys never sends, so
+   * nothing else in the codebase can see a 401. This getter is the one place
+   * that reads the real nested location, and being instance-level it stays true
+   * across rebuilds when every event listener has been destroyed with its socket.
+   */
+  get lastDisconnectCode(): number | null {
+    return this.#lastClose?.code ?? null;
   }
 
   /* ── teardown ──────────────────────────────────────────────────── */
@@ -290,7 +389,7 @@ export class NyxBaileys {
     }
     this.#disposables.dispose();
     this.applied.length = 0;
-    await this.#pendingSave.catch(() => undefined);
+    await this.#saver.drain();
     this.log.debug('disposed');
   }
 

@@ -1765,3 +1765,101 @@ test('openrouter is a configured provider with the free default', () => {
   assert.equal(PROVIDER_DEFAULTS.openrouter.keyless, false, 'it does need a key');
   assert.match(PROVIDER_DEFAULTS.openrouter.model, /:free$/, 'default is a free model');
 });
+
+/* ══ pollinations ══════════════════════════════════════════════════════ */
+
+test('pollinations is keyless with an explicit model default', () => {
+  assert.equal(PROVIDER_DEFAULTS.pollinations.keyless, true);
+  assert.equal(PROVIDER_DEFAULTS.pollinations.baseUrl, 'https://text.pollinations.ai');
+  assert.ok(PROVIDER_DEFAULTS.pollinations.model.length > 0, 'omitting model returns empty');
+});
+
+test('pollinations builds a GET with encoded prompt, model and system', async () => {
+  let seenUrl = '';
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    seenUrl = String(url);
+    return new Response('MANGO');
+  };
+
+  try {
+    const result = await complete(
+      { provider: 'pollinations', model: 'openai' },
+      [
+        { role: 'system', content: 'Reply in all caps.' },
+        { role: 'user', content: 'Say only mango' },
+      ],
+    );
+    assert.equal(result.error, undefined);
+    assert.equal(result.text, 'MANGO');
+    assert.match(seenUrl, /^https:\/\/text\.pollinations\.ai\//);
+    assert.match(seenUrl, /model=openai/);
+    assert.match(seenUrl, /system=Reply(\+|%20)in(\+|%20)all(\+|%20)caps/);
+    assert.match(seenUrl, /user%3A/);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('pollinations takes system from options when history has none', async () => {
+  let seenUrl = '';
+  const original = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    seenUrl = String(url);
+    return new Response('ok');
+  };
+
+  try {
+    await complete(
+      { provider: 'pollinations', model: 'openai' },
+      [{ role: 'user', content: 'hi' }],
+      { system: 'Be brief.' },
+    );
+    assert.match(seenUrl, /system=Be(\+|%20)brief/);
+    assert.doesNotMatch(seenUrl, /system%3A/);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('pollinations 429 surfaces as rate-limited, not a generic error', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => new Response('slow down', { status: 429 });
+
+  try {
+    const result = await complete({ provider: 'pollinations', model: 'openai' }, [
+      { role: 'user', content: 'hi' },
+    ]);
+    assert.equal(result.rateLimited, true);
+    assert.match(result.error ?? '', /rate limit/i);
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
+test('pollinations empty and brace-only bodies are errors, never replies', async () => {
+  const original = globalThis.fetch;
+  for (const body of ['', '   ', '{}']) {
+    globalThis.fetch = async () => new Response(body);
+    const result = await complete({ provider: 'pollinations', model: 'openai' }, [
+      { role: 'user', content: 'hi' },
+    ]);
+    assert.ok(result.error, `empty body ${JSON.stringify(body)} must not pass as a reply`);
+    assert.equal(result.text, '');
+  }
+  globalThis.fetch = original;
+});
+
+test('pollinations server errors name the status', async () => {
+  const original = globalThis.fetch;
+  globalThis.fetch = async () => new Response('oops', { status: 503 });
+
+  try {
+    const result = await complete({ provider: 'pollinations', model: 'openai' }, [
+      { role: 'user', content: 'hi' },
+    ]);
+    assert.match(result.error ?? '', /503/);
+  } finally {
+    globalThis.fetch = original;
+  }
+});

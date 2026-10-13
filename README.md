@@ -3,7 +3,7 @@
 [![npm](https://img.shields.io/npm/v/nyx-baileys?style=flat-square&labelColor=1a1a1a&color=4ade80)](https://www.npmjs.com/package/nyx-baileys)
 [![license](https://img.shields.io/npm/l/nyx-baileys?style=flat-square&labelColor=1a1a1a&color=60a5fa)](./package.json)
 [![node](https://img.shields.io/badge/node-%3E%3D20-5FA04E?style=flat-square&labelColor=1a1a1a&color=22d3ee)](https://nodejs.org)
-[![tests](https://img.shields.io/badge/tests-1288%20passing-22c55e?style=flat-square&labelColor=1a1a1a&color=22c55e)](./docs/VERIFICATION.md)
+[![tests](https://img.shields.io/badge/tests-1365%20passing-22c55e?style=flat-square&labelColor=1a1a1a&color=22c55e)](./docs/VERIFICATION.md)
 [![upstream](https://img.shields.io/badge/upstream-baileys%20rc14-a78bfa?style=flat-square&labelColor=1a1a1a&color=a78bfa)](https://github.com/WhiskeySockets/Baileys)
 [![ci](https://github.com/nyx-dev-officials/Nyx-Baileys/actions/workflows/ci.yml/badge.svg)](https://github.com/nyx-dev-officials/Nyx-Baileys/actions/workflows/ci.yml)
 [![last commit](https://img.shields.io/github/last-commit/nyx-dev-officials/Nyx-Baileys?style=flat-square&labelColor=1a1a1a&color=94a3b8)](https://github.com/nyx-dev-officials/Nyx-Baileys/commits/main)
@@ -33,21 +33,34 @@ real Baileys socket. No fork, no vendored copy, no edit to `node_modules`.
 ## 60-second quickstart
 
 ```bash
-npm install nyx-baileys
+git clone https://github.com/nyx-dev-officials/Nyx-Baileys.git
+cd Nyx-Baileys
+npm run setup
 ```
 
-Pair a number. rc14 removed terminal QR rendering, so ask for the 8-character
-code and type it in via **WhatsApp → Linked devices → Link a device**:
+The setup command installs project dependencies, builds the TypeScript output,
+links the global `flux` command, and registers its command directory. It also
+verifies that new shells can resolve `flux`. If Node.js or npm is missing or too
+old, install Node.js 20 LTS first, then rerun the setup command.
 
 ```bash
-npx nyx-baileys pair --dir ./session --phone 628334549585
+flux
 ```
 
-No `--phone` and it waits for a QR scan instead, printing the ref. The code is
-void about 30 s after it is issued, so have the phone open first.
+Pair a number. The interactive wizard offers either an 8-character pairing code or
+a terminal QR code. Select the pairing-code option, then type it in via
+**WhatsApp → Linked devices → Link a device**; select the QR-code option, then
+scan the rendered symbol from the same screen:
 
 ```bash
-npx nyx-baileys status --dir ./session     # is it paired, and what state
+flux --dir ./session
+```
+
+A pairing code is void about 30 s after it is issued, so have the phone open
+first.
+
+```bash
+flux status --dir ./session     # is it paired, and what state
 ```
 
 Send something:
@@ -66,7 +79,7 @@ Programmatically:
 import { createNyxBaileys } from 'nyx-baileys';
 
 const client = createNyxBaileys({ sessionDir: './session', logLevel: 'info' });
-const sock = await client.connect();           // real WASocket, 13 plugins applied
+const sock = await client.connect();           // real WASocket, 14 plugins applied
 
 await sock.sendMessage('15551234567@s.whatsapp.net', { text: 'hello' });
 
@@ -222,15 +235,15 @@ src/
   security/          validate · redact · permissions · acl · audit
   cli/               args · output
 bot/               command loader + createNyxBot host for bot scripts
-tests/               40 node:test suites, 681 tests
+tests/               64 node:test suites, 1365 tests
 docs/                this file, ARCHITECTURE, PLUGIN-API, FEATURES,
                      DESIGN-NOTES, VERIFICATION, REF-FINDINGS, ANTIBAN
 ```
 
-The default chain, in `order`: `stealth` 10 · `clock-sync` 15 · `lid-router` 20
-· `media-stream` 30 · `album` 40 · `memory-gc` 50 · `group-guard` 60 ·
-`session-repair` 65 · `reconnect` 70 · `anti-spam` 80 · `delivery` 85 · `flow`
-90 · `warmup` 100.
+The default chain, in `order`: `stealth` 10 · `verifiedSpoof` 12 · `clock-sync`
+15 · `lid-router` 20 · `media-stream` 30 · `album` 40 · `memory-gc` 50 ·
+`group-guard` 60 · `session-repair` 65 · `reconnect` 70 · `anti-spam` 80 ·
+`delivery` 85 · `flow` 90 · `warmup` 100.
 
 ## Running a bot
 
@@ -305,7 +318,7 @@ text was silently dropped on the wire. Every fix has a regression test in
 
 The verify chain is green as of 2026-10-03: `npm run check` and `npm run build`
 exit 0 under `strict` + `noUncheckedIndexedAccess`, and `npm test` reports
-**681 tests, 681 pass, 0 fail** in ~5s.
+**1365 tests, 1365 pass, 0 fail** in ~40s.
 
 The suite covers the primitives that everything else depends on — interception
 chaining and unwind, native-flow serialisation, album linkage, the jitter queue,

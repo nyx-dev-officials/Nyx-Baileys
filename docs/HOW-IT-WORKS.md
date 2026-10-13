@@ -25,7 +25,7 @@ WhatsApp.
 | `welcome` | yes | **no** |
 | `withRetry` / backoff | yes | yes (indirectly) |
 | JID, text, format, validation, security, stores | yes | n/a — pure code |
-| **Buttons / list / template / native flow** | serialisation only | **no — rc14 cannot send these at all** |
+| **Buttons / list / template / native flow** | yes — and live | **partly** — the `interactive` plugin (opt-in) delivers them; `quick_reply` renders and routes back, `single_select` is disputed above, the rest are untested |
 | **Newsletters** | **no dedicated suite** | **no** |
 | `stealth` · `metrics` · `webhooks` · `call-log` · `read-receipts` · `send-presence` · `anti-delete` | yes | **no** |
 | Polls, reactions, status, albums, media, presence | yes | **no** |
@@ -251,15 +251,23 @@ screenshots, not return values:
 | `quick_reply` buttons | renders, buttons tappable, reply routes back | **VERIFIED** |
 | `cta_url`, `cta_copy` | whitelisted by server policy | not tested |
 | `cta_call` | unknown | not tested |
-| `single_select` (sectioned list) | **never arrives** | **DEAD** |
+| `single_select` (sectioned list) | **DISPUTED — the two measurements disagree** | **UNRESOLVED** |
 | `templateMessage` / hydrated | never arrives | not tested |
 | carousels, collections, products | never arrive | not tested |
 
-A sectioned menu cannot be sent from a consumer account. That is a server-side
-Business-tier gate: the encoder accepts `single_select`, the server accepts the
-stanza, then strips the interactive node in transit. `relayMessage` has already
-resolved by then, which is the whole shape of the phantom delivery. Only the
-Business API or a Business account produces one.
+**This row is a genuine open contradiction, and neither half should be quoted as
+settled.** `AGENTS-FIX-QUEUE.md` §5-6 measured `single_select` returning a valid
+message ID and never arriving, and concluded from that a server-side Business-tier
+gate. `docs/VERIFICATION.md` retracts exactly that conclusion and reports the
+menu rendering as a categorised bottom-sheet once the row key was corrected from
+`rowId` to `id`, on the grounds that "we have not made this render yet" was the
+honest reading of a clean ID. Both were measured on 2026-10-05.
+
+What is **not** in dispute: the wire field is `id`, not `rowId`; a returned
+message ID is not evidence of delivery; and **a selection has never been observed
+arriving back from a real phone.** One operator-confirmed tap on a marked menu
+settles all of it — until then, treat the row as unresolved rather than dead, and
+check `docs/VERIFICATION.md`'s retraction before repeating the gate claim.
 
 So "it does not show on mobile" has **two** independent causes, and only one is a
 code problem.
@@ -275,8 +283,15 @@ biz
 bot  biz_bot=1        ← 1:1 chats only
 ```
 
-The `native_flow` name must match the flow actually being sent. `bot` is 1:1
-only and is required there, or consumer clients will not render the flow.
+**Corrected 2026-10-09:** the `native_flow` name must **not** match the flow being
+sent. Both attributes are fixed — `v='9'`, `name='mixed'` — for every interactive
+send. Naming the node after the button produced a stanza the client silently
+refused to render: the message arrived with no button at all. The corrected shape
+is copied from `atexovi-baileys@7.5.6-rc.6` (pinned by
+`refs/atex-ovi__wabase-button`), which hardcodes it inside `relayMessage`.
+
+`bot biz_bot=1` is additive, not required: that fork attaches it only to content
+carrying an `ai` key, so it marks an AI/bot chat rather than enabling rendering.
 
 Shipped as the `interactive` plugin — opt-in, so register it:
 

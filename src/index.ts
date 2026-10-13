@@ -9,11 +9,13 @@
  */
 
 import { existsSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 import { DisconnectReason } from '@whiskeysockets/baileys';
 
 import { createCarouselFlow, createFormFlow, createTableFlow, infoRow, radioRow } from './core/nodes.js';
 import { NyxBaileys, createNyxBaileys } from './nyxBaileys.js';
+import { bootstrap } from './cli/wizard.js';
 import { flowEngine } from './plugins/flow.js';
 import { compose, table } from './utils/compose.js';
 import type { Flow } from './plugins/flow.js';
@@ -46,7 +48,46 @@ export {
   toNatives,
 } from './core/nodes.js';
 
-export { createSessionStore, FileSessionStore, MemorySessionStore } from './core/session-store.js';
+export { createSessionStore, FileSessionStore, MemorySessionStore, SerialSaver } from './core/session-store.js';
+export { buildFullRegistry, registryToSpecs, BRIDGE_COOLDOWN_MS } from './toolkit/registry-full.js';
+export { aiGate, AI_BUSY_REPLY } from './plugins/ai-gate.js';
+export type { AiGateOptions } from './plugins/ai-gate.js';
+export {
+  configureAiState,
+  unconfigureAiState,
+  defaultAiState,
+  readAiState,
+  isAwake,
+  setAwake,
+  permitChat,
+  isChatPermitted,
+  permitPerson,
+  unpermitPerson,
+  permittedPersons,
+  fluxConfigFile,
+  readFluxFile,
+  readOpenRouterKey,
+} from './toolkit/ai-state.js';
+export {
+  FLUX_MENU_TAP_PREFIX,
+  FLUX_PAGE_TAP_PREFIX,
+  FAMILY_LIST_CAP,
+  bucketedFamilies,
+  displayFamily,
+  familyFlavor,
+  familyPageButtons,
+  familyPageCount,
+  fluxMenuCategories,
+  fluxMenuTap,
+  formatCatalogueFallback,
+  formatFamilyMenu,
+  parseFluxMenuTap,
+  parseFluxPageTap,
+  progressMeterFrames,
+  sendFluxFamilyPage,
+  sendFluxMenu,
+  sourceFamilies,
+} from './toolkit/flux-menu.js';
 export { DEFAULT_BROWSER, desktopUserAgent, resolveWebVersion } from './core/socket.js';
 export { patch, patchAll, Disposables, type PatchSet } from './core/intercept.js';
 
@@ -144,6 +185,8 @@ export type {
   QuotedMessage,
 } from './core/mention.js';
 
+export { adReply } from './plugins/ad-reply.js';
+export type { AdReplyOptions } from './plugins/ad-reply.js';
 export { antiSpam } from './plugins/antiSpam.js';
 export { stealth } from './plugins/stealth.js';
 export { warmup, rampFor } from './plugins/warmup.js';
@@ -488,6 +531,23 @@ export { supportFlow, demoForm as form, demoCarousel as carousel, demoTable as t
 
 export { createNyxBaileys as createClient, DisconnectReason };
 
+/* ── interactive wizard ──────────────────────────────────────────────
+ *
+ * `bootstrap()` is the arrow-key pairing wizard built on `@inquirer/prompts`.
+ * It is exported **by name** and only auto-runs when this file is executed
+ * directly, so `import { createClient } from 'nyx-baileys'` still resolves to the
+ * factory and never spawns a prompt.
+ */
+
+export { bootstrap } from './cli/wizard.js';
+export { renderFluxIntro, printFluxIntro, visibleWidth, padVisible } from './core/flux-intro.js';
+export { codeFrame, renderTerminalQr } from './cli/qr-display.js';
+
+export { validateIndonesianNumber, normaliseNumber, streamText, formatCountdown, waitForLink, parsePhoneFlag, PairingDiagnostics, waitForSettle, FLUX_PREFIX, chooseSessionDir, digitsFromJid, loadRememberedDir, saveRememberedDir, waitForConnection, watchForLogout } from './cli/wizard.js';
+export type { ConnectionVerdict } from './cli/wizard.js';
+export type { FluxIntroOptions, ChainEntry } from './core/flux-intro.js';
+export type { LinkWatcher } from './cli/wizard.js';
+
 /**
  * Entry point for the bundled demo — exported **by name only**.
  *
@@ -501,3 +561,28 @@ export { createNyxBaileys as createClient, DisconnectReason };
  *
  * Reach the factory with `import { makeWASocket } from 'nyx-baileys'`.
  */
+
+/**
+ * True when this module is the process entry point.
+ *
+ * Compares `import.meta.url` against the resolved argv[1], so importing the
+ * package for its library surface never triggers the wizard. Without this guard
+ * a bare `import 'nyx-baileys'` would try to draw a menu into whatever is
+ * consuming it.
+ */
+function isDirectRun(): boolean {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  try {
+    return import.meta.url === pathToFileURL(entry).href;
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectRun()) {
+  const code = await (process.argv.includes('--wizard')
+    ? bootstrap(process.argv.slice(2))
+    : main(process.argv.slice(2)));
+  process.exit(code);
+}

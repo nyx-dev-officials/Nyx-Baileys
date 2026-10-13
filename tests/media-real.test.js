@@ -20,7 +20,7 @@ import sharp from 'sharp';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
-import { compressImage, trimMedia } from '../dist/features/media.js';
+import { compressAudio, compressImage, optimizeForWhatsApp, trimMedia } from '../dist/features/media.js';
 
 const execFileAsync = promisify(execFile);
 let dir;
@@ -127,6 +127,66 @@ test('trimMedia rejects an inverted range without touching the file', async () =
     RangeError,
   );
   assert.equal(statSync(src).size, before, 'the input must not be modified');
+});
+
+/** A real 1-second WAV, so the encoder has genuine PCM to transcode. */
+async function makeWav(path) {
+  await execFileAsync('ffmpeg', [
+    '-hide_banner', '-loglevel', 'error', '-y',
+    '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1',
+    '-c:a', 'pcm_s16le',
+    path,
+  ]);
+  return path;
+}
+
+/** Decode a media file and return its reported duration in seconds. */
+async function durationOf(path) {
+  const { stdout } = await execFileAsync('ffprobe', [
+    '-v', 'error', '-show_entries', 'format=duration',
+    '-of', 'default=nw=1:nk=1', path,
+  ]);
+  return Number.parseFloat(stdout.trim());
+}
+
+test('compressAudio produces decodable audio, not a gzip blob', async () => {
+  const src = await makeWav(join(dir, 'tone.wav'));
+  const result = await compressAudio(src, { format: 'mp3', bitrate: 96 });
+
+  // The old implementation wrote `.compressed.gz` — bytes no player can decode,
+  // returned as a plausible ratio. Assert a real container, with a real duration.
+  assert.ok(result.outputPath.endsWith('.mp3'), 'output must carry the encoded format');
+  assert.ok(await durationOf(result.outputPath) > 0.5, 'the output must decode to real audio');
+  assert.ok(result.originalSize > 0 && result.compressedSize > 0);
+});
+
+test('compressAudio refuses a non-audio input instead of gzipping it', async () => {
+  const junk = join(dir, 'not-audio.txt');
+  writeFileSync(junk, 'this is not audio at all', 'utf8');
+
+  await assert.rejects(() => compressAudio(junk), /ffmpeg/i);
+});
+
+test('optimizeForWhatsApp produces a real JPEG and derives the extension', async () => {
+  const src = await makePng(join(dir, 'wa-in.png'), 6000, 3000);
+  const result = await optimizeForWhatsApp(src, { mediaType: 'image' });
+
+  // The old implementation gzipped the bytes and kept the *original* extension
+  // while returning whatsappReady: true. Assert a decodable image whose format
+  // matches the extension it was given.
+  assert.ok(result.outputPath.endsWith('.jpg'), 'the extension must follow the produced format');
+  const meta = await sharp(result.outputPath).metadata();
+  assert.equal(meta.format, 'jpeg');
+  assert.ok((meta.width ?? 0) <= 4096 && (meta.height ?? 0) <= 4096, 'the long edge must fit WhatsApp');
+  assert.equal(result.mimeType, 'image/jpeg');
+  assert.equal(typeof result.whatsappReady, 'boolean');
+});
+
+test('optimizeForWhatsApp refuses a non-video input rather than certifying it ready', async () => {
+  const junk = join(dir, 'not-a-video.txt');
+  writeFileSync(junk, 'definitely not an mp4', 'utf8');
+
+  await assert.rejects(() => optimizeForWhatsApp(junk, { mediaType: 'video' }), /ffmpeg/i);
 });
 
 test('trimMedia throws clearly when ffmpeg is unavailable, never slicing bytes', async () => {

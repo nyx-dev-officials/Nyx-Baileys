@@ -4,6 +4,34 @@ All notable changes to `nyx-baileys`. Format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project uses
 semantic versioning with a `0.x` line.
 
+## [Unreleased]
+
+### Fixed
+
+- **Interactive messages arrived without their button.** The `native_flow` stanza
+  node was named after the button being sent (`single_select`, `quick_reply`, …).
+  It must not be. The attributes are fixed literals — `v='9'`, `name='mixed'` —
+  for every `interactiveMessage`, `buttonsMessage` and `listMessage`. Deriving the
+  name from the payload produced a stanza the client silently refused to render:
+  the send returned a message ID and the message showed up with no button on it.
+
+  The shape is not inferred. It is read out of `atexovi-baileys@7.5.6-rc.6`, the
+  fork pinned by `refs/atex-ovi__wabase-button` — the implementation behind the
+  menu this library reproduces — whose `relayMessage` hardcodes it. Confirmed on a
+  phone on 2026-10-09: the menu renders and its rows are selectable.
+
+- **`sendCategoryMenu` relayed without `additionalNodes`.** It assumed the
+  `biz`/`bot` nodes were a quick-reply concern. They are not — the menu needs them
+  too, and now reuses `interactiveNodes()` from `src/plugins/interactive.ts`
+  rather than deciding for itself.
+
+  Both defects shared one symptom, a message that returns an ID and does not
+  render, and both had tests asserting the wrong invariant, so the suite stayed
+  green through every hardware attempt. Those tests now assert the fixed shape.
+
+The stanza sketched in the `0.3.1` entry below is superseded — see
+`docs/VERIFICATION.md` for the corrected node and how it was established.
+
 ## [0.3.1] — 2026-10-06
 
 ### Added

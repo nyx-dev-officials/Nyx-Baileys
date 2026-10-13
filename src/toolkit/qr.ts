@@ -106,11 +106,62 @@ const VERSIONS: VersionSpec[] = [
   /* v10 */ { total: 346, eccPerBlock: 26, group1Blocks: 4, group1Data: 43, group2Blocks: 1, group2Data: 44, alignment: [6, 28, 50] },
 ];
 
-/** Error correction level M, as the two-bit value used in format information. */
-const EC_LEVEL_M_BITS = 0b00;
+/**
+ * Error-correction level, as the two-bit value used in format information.
+ *
+ * Only L and M are tabulated. Q and H have no capacity rows here, so
+ * advertising them would just be a way to produce a symbol this encoder cannot
+ * build correctly.
+ */
+const EC_BITS = { L: 0b01, M: 0b00 } as const;
+export type EccLevel = keyof typeof EC_BITS;
+
+/**
+ * Version 1-11 at error-correction level **L**.
+ *
+ * Added because level M tops out at 213 bytes and a real WhatsApp pairing ref is
+ * 277. Level L reaches 321 bytes at version 11, so the QR branch drew nothing
+ * at all — `encodeQr` threw, and the caller caught it and printed a single line,
+ * which reads as a hang rather than an error.
+ *
+ * Level L is the right trade here: a pairing ref is read once, by a phone held
+ * at normal distance, so the extra redundancy of M buys nothing and costs the
+ * ~60 bytes of payload we needed.
+ *
+ * Every row satisfies `total === data + eccPerBlock * blocks`, and the resulting
+ * byte-mode capacities match ISO/IEC 18004 Table 7 (v10-L = 271, v11-L = 321).
+ * These tables are not trusted on recall — `tests/qr-render.test.js` decodes
+ * the finished symbol and compares it to the input.
+ */
+const VERSIONS_L: VersionSpec[] = [
+  /* v1  */ { total: 26, eccPerBlock: 7, group1Blocks: 1, group1Data: 19, group2Blocks: 0, group2Data: 0, alignment: [] },
+  /* v2  */ { total: 44, eccPerBlock: 10, group1Blocks: 1, group1Data: 34, group2Blocks: 0, group2Data: 0, alignment: [6, 18] },
+  /* v3  */ { total: 70, eccPerBlock: 15, group1Blocks: 1, group1Data: 55, group2Blocks: 0, group2Data: 0, alignment: [6, 22] },
+  /* v4  */ { total: 100, eccPerBlock: 20, group1Blocks: 1, group1Data: 80, group2Blocks: 0, group2Data: 0, alignment: [6, 26] },
+  /* v5  */ { total: 134, eccPerBlock: 26, group1Blocks: 1, group1Data: 108, group2Blocks: 0, group2Data: 0, alignment: [6, 30] },
+  /* v6  */ { total: 172, eccPerBlock: 18, group1Blocks: 2, group1Data: 68, group2Blocks: 0, group2Data: 0, alignment: [6, 34] },
+  /* v7  */ { total: 196, eccPerBlock: 20, group1Blocks: 2, group1Data: 78, group2Blocks: 0, group2Data: 0, alignment: [6, 22, 38] },
+  /* v8  */ { total: 242, eccPerBlock: 24, group1Blocks: 2, group1Data: 97, group2Blocks: 0, group2Data: 0, alignment: [6, 24, 42] },
+  /* v9  */ { total: 292, eccPerBlock: 30, group1Blocks: 2, group1Data: 116, group2Blocks: 0, group2Data: 0, alignment: [6, 26, 46] },
+  /* v10 */ { total: 346, eccPerBlock: 18, group1Blocks: 2, group1Data: 68, group2Blocks: 2, group2Data: 69, alignment: [6, 28, 50] },
+  /* v11 */ { total: 404, eccPerBlock: 20, group1Blocks: 4, group1Data: 81, group2Blocks: 0, group2Data: 0, alignment: [6, 30, 54] },
+];
 
 /** Byte-mode payload capacity at level M, indexed by version - 1. */
-const CAPACITY: number[] = [14, 26, 42, 62, 84, 106, 122, 152, 180, 213];
+const CAPACITY_M: number[] = [14, 26, 42, 62, 84, 106, 122, 152, 180, 213];
+
+/** Byte-mode payload capacity at level L, indexed by version - 1. */
+const CAPACITY_L: number[] = [17, 32, 53, 78, 106, 134, 154, 192, 230, 271, 321];
+
+const VERSIONS_BY_LEVEL = { L: VERSIONS_L, M: VERSIONS } as const;
+
+/** Version parameters for a given error-correction level. */
+function versionSpec(version: number, level: EccLevel): VersionSpec {
+  const table = VERSIONS_BY_LEVEL[level];
+  const spec = table[version - 1];
+  if (!spec) throw new Error(`version ${version} is outside this encoder's ${level} range (1-${table.length})`);
+  return spec;
+}
 
 /**
  * Pick the smallest version that fits, or throw naming the limit.
@@ -118,19 +169,20 @@ const CAPACITY: number[] = [14, 26, 42, 62, 84, 106, 122, 152, 180, 213];
  * Throwing matters: truncating input to fit would produce a scannable QR that
  * silently decodes to something other than what the user typed.
  */
-function chooseVersion(byteLength: number): number {
-  for (let i = 0; i < CAPACITY.length; i++) {
-    if (byteLength <= CAPACITY[i]!) return i + 1;
+function chooseVersion(byteLength: number, level: EccLevel): number {
+  const capacity = level === 'L' ? CAPACITY_L : CAPACITY_M;
+  for (let i = 0; i < capacity.length; i++) {
+    if (byteLength <= capacity[i]!) return i + 1;
   }
   throw new Error(
-    `That is ${byteLength} bytes; this encoder handles up to ${CAPACITY[CAPACITY.length - 1]} `
-    + 'at error correction level M. Shorten the text or split it into two codes.',
+    `That is ${byteLength} bytes; this encoder handles up to ${capacity[capacity.length - 1]} `
+    + `at error correction level ${level}. Shorten the text or split it into two codes.`,
   );
 }
 
 /** Build the final interleaved codeword stream. */
-function buildCodewords(bytes: Uint8Array, version: number): Uint8Array {
-  const spec = VERSIONS[version - 1]!;
+function buildCodewords(bytes: Uint8Array, version: number, level: EccLevel): Uint8Array {
+  const spec = versionSpec(version, level);
   const bits: number[] = [];
 
   // Byte mode indicator.
@@ -266,8 +318,8 @@ function drawFormatAreas(grid: Grid, reserved: Grid, size: number): void {
 }
 
 /** BCH(15,5) format information with the mandated 0x5412 mask. */
-function formatBits(mask: number): number {
-  const data = (EC_LEVEL_M_BITS << 3) | mask;
+function formatBits(mask: number, level: EccLevel): number {
+  const data = (EC_BITS[level] << 3) | mask;
   let value = data << 10;
   for (let i = 4; i >= 0; i--) {
     if ((value >> (i + 10)) & 1) value ^= 0b10100110111 << i;
@@ -284,8 +336,8 @@ function versionBits(version: number): number {
   return (version << 12) | value;
 }
 
-function drawFormatInfo(grid: Grid, size: number, mask: number): void {
-  const bits = formatBits(mask);
+function drawFormatInfo(grid: Grid, size: number, mask: number, level: EccLevel): void {
+  const bits = formatBits(mask, level);
   for (let i = 0; i < 15; i++) {
     const dark = (bits >> i) & 1;
     // Copy 1, around the top-left finder.
@@ -431,12 +483,12 @@ export interface QrResult {
 }
 
 /** Encode text as a QR Code symbol. */
-export function encodeQr(text: string): QrResult {
+export function encodeQr(text: string, level: EccLevel = 'M'): QrResult {
   const bytes = new TextEncoder().encode(text);
   if (bytes.length === 0) throw new Error('Nothing to encode — pass some text.');
-  const version = chooseVersion(bytes.length);
+  const version = chooseVersion(bytes.length, level);
   const size = version * 4 + 17;
-  const codewords = buildCodewords(bytes, version);
+  const codewords = buildCodewords(bytes, version, level);
 
   let best: { grid: Grid; score: number; mask: number } | null = null;
 
@@ -446,7 +498,7 @@ export function encodeQr(text: string): QrResult {
     const reserved = newGrid(size, 0);
     drawFinders(grid, reserved, size);
     drawTiming(grid, reserved, size);
-    drawAlignment(grid, reserved, VERSIONS[version - 1]!.alignment, size);
+    drawAlignment(grid, reserved, versionSpec(version, level).alignment, size);
     drawFormatAreas(grid, reserved, size);
     drawVersionInfo(grid, reserved, size, version);
     placeData(grid, reserved, size, codewords);
@@ -456,7 +508,7 @@ export function encodeQr(text: string): QrResult {
         if (!reserved[r]![c] && maskAt(mask, r, c)) grid[r]![c] = grid[r]![c]! ^ 1;
       }
     }
-    drawFormatInfo(grid, size, mask);
+    drawFormatInfo(grid, size, mask, level);
 
     const score = penalty(grid, size);
     if (!best || score < best.score) best = { grid, score, mask };
@@ -491,21 +543,47 @@ export function renderQr(result: QrResult, quiet = 2): string {
 }
 
 /** Compact half-block rendering, roughly half the line count. */
-export function renderQrCompact(result: QrResult, quiet = 2): string {
+/**
+ * Render a symbol as half-block characters, two module rows per terminal cell.
+ *
+ * Three bugs were fixed here, and every one of them made the output
+ * unscannable. None is visible to a test that only checks the encoder's module
+ * matrix — which is why `tests/qr-render.test.js` decodes the *rendered text*.
+ *
+ *  - `y + 1 < size` silently dropped the final module row. Every QR size is
+ *    `17 + 4 * version`, always odd, so the pair loop never covered the last
+ *    row. Every version lost exactly one module row.
+ *  - The blank quiet-zone rows were built as `size + quiet * 2`, omitting the
+ *    horizontal margins, so the top and bottom margins were narrower than the
+ *    symbol they framed.
+ *  - The vertical margin was `quiet` *lines* while the horizontal was `quiet`
+ *    *modules*. A line is two module rows, so the margin was double on the
+ *    vertical and only `quiet` on the horizontal — and 2 modules is below the
+ *    four-module minimum in ISO/IEC 18004.
+ *
+ * `quiet` is therefore interpreted in **modules** on all four sides.
+ */
+export function renderQrCompact(result: QrResult, quiet = 4): string {
   const { modules, size } = result;
+  const margin = ' '.repeat(quiet);
+  const blank = margin + ' '.repeat(size) + margin;
+  // A terminal cell is two module rows tall, so the vertical margin needs half
+  // as many lines. `ceil` keeps an odd margin from losing a row.
+  const marginLines = Math.ceil(quiet / 2);
   const lines: string[] = [];
-  const blank = ' '.repeat(size + quiet * 2);
-  for (let i = 0; i < quiet; i++) lines.push(blank);
-  for (let y = 0; y + 1 < size; y += 2) {
-    let out = '  '.repeat(quiet);
+  for (let i = 0; i < marginLines; i++) lines.push(blank);
+
+  for (let y = 0; y < size; y += 2) {
+    const hasBottom = y + 1 < size;
+    let out = margin;
     for (let x = 0; x < size; x++) {
       const top = modules[y]![x];
-      const bottom = modules[y + 1]![x];
-      // Upper block, lower block, full block, or space.
+      const bottom = hasBottom ? modules[y + 1]![x] : false;
       out += top && bottom ? '█' : top ? '▀' : bottom ? '▄' : ' ';
     }
-    lines.push(out + '  '.repeat(quiet));
+    lines.push(out + margin);
   }
-  for (let i = 0; i < quiet; i++) lines.push(blank);
+
+  for (let i = 0; i < marginLines; i++) lines.push(blank);
   return lines.join('\n');
 }

@@ -12,17 +12,33 @@ OWNERS=15551234567 node examples/bot/index.mjs
 ```
 
 First run prints a QR — scan it from **WhatsApp → Linked devices**. Then message
-the number:
+the number (the default prefix is `flux `, or pairing first with `flux` and the
+bot stays up on the same connection):
 
 ```
-/ping
-/menu
-/whoami
+flux ping
+flux menu
+flux whoami
 ```
+
+`flux menu` sends the interactive catalogue — one row per command family, with
+live counts. Tapping a family replies with its first page and **Next**, then
+**Previous / Next** as you move: a page turn *edits the message in place*
+rather than posting a new one, 25 commands per page. `flux menu <family>` works
+typed too (same paged message), and `flux menu features` keeps the old
+button-type demo sheet.
 
 Set `GROUPS=true` to let it answer in groups. `/groupinfo` and `/kick` only work
 in a group, and `/kick` additionally needs you to be an admin and the bot to be
 an admin.
+
+## Menu taps
+
+`/menu` sends the interactive feature menu — Call, URL, Quick Reply, Copy — and a
+tap sends that feature's example button back. The dispatch lives in `index.mjs`:
+read the row id out of `interactiveResponseMessage`, resolve it to a feature, and
+send it. An id that is not one of ours resolves to `null` and is ignored, so an
+unrelated interactive message is never mis-dispatched.
 
 ## Layout
 
@@ -33,6 +49,7 @@ examples/bot/
   commands/
     ping.mjs
     echo.mjs
+    menu.mjs           the native feature menu (falls back to text)
     whoami.mjs
     groupinfo.mjs      groupOnly
     kick.mjs           groupOnly + adminsOnly + botAdminOnly

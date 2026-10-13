@@ -8,7 +8,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { commands, tokenize, toUser } from '../dist/plugins/commands.js';
+import { commands, stripPrefix, tokenize, toUser } from '../dist/plugins/commands.js';
 
 import { applyPlugin, fakeSocket, flush, upsert, wmMessage } from './helpers.js';
 
@@ -53,6 +53,65 @@ test('tokenize honours quotes and toUser normalises numbers', () => {
   assert.deepEqual(tokenize('a "b c" \'d e\''), ['a', 'b c', 'd e']);
   assert.equal(toUser('+1 (555) 123-4567'), '15551234567@s.whatsapp.net');
   assert.equal(toUser('15551234567@s.whatsapp.net'), '15551234567@s.whatsapp.net');
+});
+
+test('stripPrefix matches any case, separator forms, and the bare word', () => {
+  assert.deepEqual(stripPrefix('flux ping', 'flux '), { rest: 'ping', bare: false });
+  assert.deepEqual(stripPrefix('FLUX ping', 'flux '), { rest: 'ping', bare: false });
+  assert.deepEqual(stripPrefix('Flux ping', 'flux '), { rest: 'ping', bare: false });
+  assert.deepEqual(stripPrefix('flux.ping', 'flux '), { rest: 'ping', bare: false });
+  assert.deepEqual(stripPrefix('flux/ping', 'flux '), { rest: 'ping', bare: false });
+  assert.deepEqual(stripPrefix('flux:ping', 'flux '), { rest: 'ping', bare: false });
+  assert.deepEqual(stripPrefix('flux-ping', 'flux '), { rest: 'ping', bare: false });
+  assert.deepEqual(stripPrefix('flux_ping', 'flux '), { rest: 'ping', bare: false });
+  assert.deepEqual(stripPrefix('flux', 'flux '), { rest: '', bare: true });
+  assert.deepEqual(stripPrefix('FLUX', 'flux '), { rest: '', bare: true });
+  assert.deepEqual(stripPrefix('flux ', 'flux '), { rest: '', bare: true });
+  assert.equal(stripPrefix('fluxbot ping', 'flux '), null);
+  assert.equal(stripPrefix('hello ping', 'flux '), null);
+  assert.equal(stripPrefix('', 'flux '), null);
+});
+
+test('stripPrefix leaves custom prefixes exactly as before', () => {
+  assert.deepEqual(stripPrefix('/ping', '/'), { rest: 'ping', bare: false });
+  assert.deepEqual(stripPrefix('/flux ping', '/'), { rest: 'flux ping', bare: false });
+  assert.equal(stripPrefix('flux ping', '/'), null);
+});
+
+test('variant casings dispatch through a real upsert', async () => {
+  const { sock } = rig({ prefix: 'flux ' });
+  sock.commands.register({ name: 'ping', handler: (c) => c.reply('pong') });
+
+  for (const body of ['flux ping', 'FLUX ping', 'Flux ping', 'flux.ping', 'flux:ping']) {
+    sock.sent.length = 0;
+    say(sock, body);
+    await flush();
+    assert.equal(lastText(sock), 'pong', `${body} did not dispatch`);
+  }
+});
+
+test('a longer word starting with flux is not a command', async () => {
+  const { sock } = rig({ prefix: 'flux ' });
+  let fired = false;
+  sock.commands.register({ name: 'bot', handler: () => { fired = true; } });
+
+  say(sock, 'fluxbot ping');
+  await flush();
+  assert.equal(fired, false);
+  assert.equal(sock.sent.length, 0);
+});
+
+test('the bare prefix word stays silent in the router; the gate owns it', async () => {
+  const { sock } = rig({ prefix: 'flux ' });
+  let fired = false;
+  sock.commands.register({ name: 'ping', handler: () => { fired = true; } });
+
+  for (const body of ['flux', 'FLUX', 'flux ']) {
+    say(sock, body);
+    await flush();
+  }
+  assert.equal(fired, false);
+  assert.equal(sock.sent.length, 0);
 });
 
 test('an unknown command falls through to the fallback', async () => {

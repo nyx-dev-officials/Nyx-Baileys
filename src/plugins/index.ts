@@ -44,6 +44,8 @@ export { statusFeed } from './status.js';
 export { newsletters } from './newsletter.js';
 export { callLog } from './call-log.js';
 export { commands, tokenize } from './commands.js';
+export { aiGate, AI_BUSY_REPLY } from './ai-gate.js';
+export type { AiGateOptions } from './ai-gate.js';
 export { webhooks } from './webhook.js';
 export { interactive } from './interactive.js';
 export { metrics } from './metrics.js';
@@ -55,6 +57,10 @@ export type { HiddenOptions } from './Hidden.js';
 /* verified */
 export { verifiedSpoof } from './Verified.js';
 export type { VerifiedOptions } from './Verified.js';
+
+/* branding card */
+export { adReply } from './ad-reply.js';
+export type { AdReplyOptions } from './ad-reply.js';
 
 
 /* moderation */

@@ -96,7 +96,7 @@ and verified:
 patch A, then patch B on the same method  →  B[A[ORIGINAL(1)]]     both ran
 ```
 
-### The pristine stash, and the bug still living in it
+### The pristine stash, and the bug that used to live in it
 
 Separately from `original`, `patch` stashes a copy of the truly-pristine function
 on a well-known symbol, `Symbol.for('nyx-baileys.pristine')`
@@ -135,13 +135,14 @@ patchAll(t, {a, b})  →  returns 2 handles, first is an aggregate
 r[0].undo()           →  a restored, b set to undefined
 ```
 
-`VERIFICATION.md` D11 noted the return shape (`intercept.ts:103-111` returns
-`[aggregate, ...applied.slice(1)]`, where `applied[0]` is dropped and the
-aggregate's `undo()` supersedes every other handle — easy to double-undo). The
-stash scoping is the same defect seen from the other side, and it is the reason
-`patchAll` is currently unusable for multi-method targets. Three of the failing
-tests in `tests/intercept.test.js` name exactly these behaviours. Fix is one line:
-merge into the existing stash object rather than only creating it.
+**Both halves are now fixed.** The stash merges each method's original into the
+existing object rather than creating it once and storing only the first name
+(`intercept.ts:57-65`), so `undo()` for a second method on the same target
+restores it instead of writing `undefined` over a live method. `patchAll` returns
+exactly the methods that applied — absent methods no longer occupy a slot — and
+undo-everything is `undoAll()` on the array rather than a fake first element that
+silently superseded every other handle (`VERIFICATION.md` D11). Three regression
+tests in `tests/intercept.test.js` pin exactly these behaviours.
 
 ### What happens when `patch` does not apply
 
@@ -194,6 +195,8 @@ The live default chain, verified by instantiating and reading `plugins()`:
 | `order` | Plugin | File | Owns |
 |---|---|---|---|
 | 10 | `stealth` | `plugins/stealth.ts` | identity pin, presence on real state |
+| 12 | `verifiedSpoof` | `plugins/Verified.ts` | default-on branding; `sendMessage` wrapper |
+| 15 | `clock-sync` | `plugins/clock-sync.ts` | server clock estimate, `sock.clock` |
 | 20 | `lid-router` | `plugins/lid.ts` | `resolveJid` / `resolvePn`, LRU cache |
 | 30 | `media-stream` | `plugins/media-stream.ts` | `downloadMedia`, `streamMedia` |
 | 40 | `album` | `plugins/album.ts` | `albums`, `expandAlbum`, `waitForAlbum` |
@@ -202,6 +205,7 @@ The live default chain, verified by instantiating and reading `plugins()`:
 | 65 | `session-repair` | `plugins/session-repair.ts` | `__repairStats`, payload normalisation |
 | 70 | `reconnect` | `plugins/reconnect.ts` | `health()`, backoff, rebuild requests |
 | 80 | `anti-spam` | `plugins/antiSpam.ts` | `__antispam`, outbound pacing queue |
+| 85 | `delivery` | `plugins/delivery.ts` | delivery-rate tracking (`sock.delivery`) |
 | 90 | `flow` | `plugins/flow.ts` | `flows`, conversational state machine |
 | 100 | `warmup` | `plugins/warmup.ts` | pacing ramp, persisted start time |
 
@@ -522,8 +526,10 @@ src/
     nodes.ts               native-flow, album, edit protobuf builders
     media.ts               rc14 media traversal (the two-hop rule)
     session-store.ts       SessionStore interface + file/memory stores + createSessionStore
-  plugins/                 11 plugins, each a {name, order, apply}
+  plugins/                 14 in the default chain, each a {name, order, apply}
     stealth.ts        10    identity pin, presence on real state
+    Verified.ts       12    default-on message branding (user-authored)
+    clock-sync.ts     15    server clock estimate
     lid.ts            20    resolveJid / resolvePn, TTL cache
     media-stream.ts   30    downloadMedia / streamMedia, size ceiling
     album.ts          40    albums / expandAlbum / waitForAlbum
@@ -532,9 +538,10 @@ src/
     session-repair.ts 65    payload normalisation, __repairStats
     reconnect.ts      70    backoff, health(), rebuild requests
     antiSpam.ts       80    pacing queue, __antispam
+    delivery.ts       85    delivery-rate tracking
     flow.ts           90    flows registry, conversational state machine
     warmup.ts        100    ramp, persisted
-    metrics.ts       (new)  dependency-free registry, cardinality-capped
+    metrics.ts       110    dependency-free registry, cardinality-capped (opt-in)
   utils/
     types.ts               Plugin, PluginContext, SessionStore, SuperOptions
     compose.ts             WhatsApp text dialect, monospace tables, CJK widths
@@ -567,7 +574,7 @@ prisma, redis — 1,472 lines) were deleted in `0ece183`. Nothing outside
 re-exports them and `package.json` no longer maps `./adapters` or
 `./adapters/*`.
 
-The export surface is **22 targets**, all resolving (`node scripts/check-exports.mjs`):
+The export surface is **27 targets**, all resolving (`node scripts/check-exports.mjs`):
 
 ```
 .  ./lite  ./lite/*  ./package.json  ./core/*  ./plugins  ./plugins/*
@@ -589,8 +596,8 @@ Measured 2026-10-05 against the current tree.
 | Type check | `npm run check` | **exit 0 — 0 errors** |
 | Lint | `npm run lint` | **exit 0** (runs the same command as `check`) |
 | Build | `npm run build` | **exit 0 — 0 errors** |
-| Test | `npm test` | **exit 0 — 689 pass / 0 fail** |
-| Exports | `node scripts/check-exports.mjs` | **all 22 targets resolve** |
+| Test | `npm test` | **exit 0 — 1365 pass / 0 fail** |
+| Exports | `node scripts/check-exports.mjs` | **all 27 targets resolve** |
 | CI | GitHub Actions | **green** on Node 20 and 22 |
 
 Green under `strict` + `noUncheckedIndexedAccess`, with `dist/` current.

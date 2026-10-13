@@ -21,7 +21,7 @@ import { commands, type CommandMessages, type CommandSpec } from '../plugins/com
 import { featurePlugins } from '../plugins/index.js';
 import { loadCommands, type LoadCommandsOptions } from './loader.js';
 
-import type { CoreSocket, Logger, SuperOptions } from '../utils/types.js';
+import type { CoreSocket, Logger, Plugin, SuperOptions } from '../utils/types.js';
 
 export interface NyxBotOptions extends SuperOptions {
   /** Command prefix. Default `/`. */
@@ -38,6 +38,8 @@ export interface NyxBotOptions extends SuperOptions {
   groups?: boolean;
   /** Extra commands registered inline. */
   commands?: readonly CommandSpec[];
+  /** Extra plugins applied before connecting. Default none. */
+  plugins?: readonly Plugin[];
   /** Include the ten opt-in feature plugins. Default false. */
   features?: boolean;
   /** Loader tuning (filter, onError, recursive). */
@@ -93,6 +95,8 @@ export async function createNyxBot(options: NyxBotOptions = {}): Promise<NyxBot>
   if (options.features) {
     for (const plugin of featurePlugins()) client.registerPlugin(plugin);
   }
+
+  for (const plugin of options.plugins ?? []) client.registerPlugin(plugin);
 
   // Load commands before connecting so the menu is complete on open.
   const loaded: CommandSpec[] = [...(options.commands ?? [])];

@@ -21,15 +21,18 @@ socket at runtime with an ordered plugin chain and returns a real Baileys socket
 
 ## 2. Git state — **read this before you commit anything**
 
+Re-measured 2026-10-08 (`git status`):
+
 ```
- M src/nyxBaileys.ts            ← wires verifiedSpoof into the default chain
- M src/plugins/anti-delete.ts   ← user edit, NOT ours (see §6.4)
- M src/plugins/index.ts         ← exports hiddenMentions
- M src/plugins/interactive.ts   ← merged with Gemini's row normaliser
- M tests/interactive.test.js    ← two assertions updated to match
-?? src/plugins/Hidden.ts        ← user-created, untracked, never tested
-?? src/plugins/Verified.ts      ← user-created, untracked, BROKEN (see §6.1)
+?? probe-debug.mjs   ← scratch probes for the Flux free-model path
+?? probe-free.mjs    ← scratch; per TESTING.md these belong in Temp, not the repo
+?? probe-raw.mjs     ← scratch
 ```
+
+**This section previously listed a dirty tree with `Verified.ts` and `Hidden.ts`
+untracked. Both are now tracked** (`git ls-files` confirms), the tree is clean
+apart from the three scratch probes, and `verifiedSpoof` is wired into the default
+chain at order 12 (`src/nyxBaileys.ts:70`).
 
 `Hidden.ts` and `Verified.ts` are **user-authored**. They are not in git, not in CI,
 not in the published tarball, and `Verified.ts` has a confirmed delivery defect.
@@ -45,11 +48,11 @@ Do not commit either without an explicit instruction.
 cd /c/Nyx-Baileys
 npm run check      # tsc --noEmit, strict
 npm run build      # clean dist, then tsc
-npm test           # node:test, 1288 assertions
+npm test           # node:test, 1365 assertions
 node scripts/check-exports.mjs   # 24 export targets
 ```
 
-Current status: **check clean · build clean · 1288 pass / 0 fail · 27 exports resolve.**
+Current status: **check clean · build clean · 1365 pass / 0 fail · 27 exports resolve.**
 
 `867` is up from 783: `tests/ops50.test.js` adds 84 assertions over the 92 functions in
 `src/toolkit/ops-50/`. See §12.
@@ -355,6 +358,8 @@ cd /c/Nyx-Baileys && node /c/Users/bian/AppData/Local/Temp/opencode/<name>.mjs
 | `src/plugins/Hidden.ts` | **User-authored, untracked, untested.** Hidden mention injector. |
 | `src/plugins/anti-delete.ts` | Revoke capture + optional forward. Modified. See §6.4. |
 | `src/toolkit/category-menu.ts` | `sendCategoryMenu()` / `readMenuSelection()`. |
+| `src/toolkit/feature-menu.ts` | `featureMenu()` / `sendFeatureMenu()`. The Call/URL/Quick-Reply/Copy/Location sheet. |
+| `tests/feature-menu.test.js` | 24 assertions on the feature menu's payload shape and id round-trip. |
 | `src/toolkit/ops.ts` | 20 operational helpers. |
 | `src/plugins/chat-ops.ts` | Group/chat settings. Opt-in. |
 | `src/core/intercept.js`→`.ts` | `patch()` + `invariant()` used by every plugin. |

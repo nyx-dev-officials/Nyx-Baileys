@@ -42,6 +42,7 @@
 import { generateWAMessageFromContent, proto } from '@whiskeysockets/baileys';
 import { randomBytes } from 'node:crypto';
 
+import { interactiveNodes } from '../plugins/interactive.js';
 import type { CoreSocket } from '../utils/types.js';
 
 /** One selectable row. `id` is what the client echoes back on selection. */
@@ -82,10 +83,15 @@ export interface CategoryMenuResult {
  * reach this content type at all — `generateWAMessageContent` has no branch for
  * it and its final `else` throws `Boom: Invalid media type`.
  *
- * No `additionalNodes` are sent. The `biz` / `interactive` / `native_flow` /
- * `bot` nodes are what make a **quick reply** render on consumer clients; this
- * menu shape does not need them, and adding them attaches a `quick_reply`-shaped
- * flow name to a `single_select` button, which is not what we want to send.
+ * ## It also carries the `biz` / `bot` stanza nodes, and that is not optional
+ *
+ * This function used to send none, on the reasoning that the nodes are what make
+ * a *quick reply* render and a `single_select` menu does not need them. **A live
+ * send on 2026-10-09 disproved that**: the menu was relayed, returned a valid
+ * message ID, and never arrived — the exact phantom-delivery signature
+ * `src/plugins/interactive.ts` documents. `interactiveNodes()` already encodes
+ * the node shape and is reused here rather than re-derived — including the fixed
+ * `native_flow` name, which is deliberately not the button being sent.
  */
 export async function sendCategoryMenu(
   sock: CoreSocket,
@@ -166,7 +172,10 @@ export async function sendCategoryMenu(
 
   await (sock as unknown as {
     relayMessage: (j: string, m: unknown, o: unknown) => Promise<void>;
-  }).relayMessage(jid, full.message, { messageId: full.key.id });
+  }).relayMessage(jid, full.message, {
+    messageId: full.key.id,
+    additionalNodes: interactiveNodes(jid),
+  });
 
   return {
     id: full.key.id ?? '',
@@ -187,19 +196,27 @@ export async function sendCategoryMenu(
  * handler down.
  */
 export function readMenuSelection(message: unknown): string | null {
-  const response = (message as {
+  const m = message as {
     interactiveResponseMessage?: {
       nativeFlowResponseMessage?: { paramsJson?: string | null } | null;
     };
-  })?.interactiveResponseMessage;
+    buttonsResponseMessage?: { selectedButtonId?: string | null } | null;
+  } | null | undefined;
 
-  const raw = response?.nativeFlowResponseMessage?.paramsJson;
-  if (!raw) return null;
-
-  try {
-    const parsed = JSON.parse(raw) as { id?: unknown };
-    return typeof parsed.id === 'string' && parsed.id ? parsed.id : null;
-  } catch {
-    return null;
+  // A native-flow tap (single_select row, quick_reply button) arrives here.
+  const raw = m?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson;
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw) as { id?: unknown };
+      if (typeof parsed.id === 'string' && parsed.id) return parsed.id;
+    } catch {
+      // fall through to the plain-button shape rather than giving up
+    }
   }
+
+  // A plain button tap arrives here instead. Baileys maps `buttonReply.id` to
+  // this field, and a client that renders our quick_reply as a plain button
+  // sends it this way — reading only the native-flow shape would drop the tap.
+  const selected = m?.buttonsResponseMessage?.selectedButtonId;
+  return typeof selected === 'string' && selected ? selected : null;
 }

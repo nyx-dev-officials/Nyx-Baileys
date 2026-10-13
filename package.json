@@ -40,6 +40,7 @@
     "./features/*": "./dist/features/*.js"
   },
   "bin": {
+    "flux": "./bin/flux.js",
     "nyx-baileys": "./bin/nyx-baileys.js"
   },
   "files": [
@@ -51,8 +52,9 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "npm run clean && tsc -p tsconfig.json",
+    "build": "npm run clean && tsc -p tsconfig.json && npm run build:assets",
     "check": "tsc -p tsconfig.json --noEmit",
+"build:assets": "node -e \"require('fs').cpSync('src/assets','dist/assets',{recursive:true})\"",
     "lint": "tsc -p tsconfig.json --noEmit",
     "test": "node --test ./tests/*.test.js",
     "demo": "node dist/index.js",
@@ -60,12 +62,14 @@
     "bench:plugins": "node --expose-gc bench/plugin-profile.mjs",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "prepublishOnly": "npm run clean && npm run build && node scripts/check-exports.mjs",
-    "pair": "node bin/nyx-baileys.js pair",
+    "setup": "node scripts/setup-flux.mjs",
+    "pair": "flux",
     "status": "node bin/nyx-baileys.js status",
     "send": "node bin/nyx-baileys.js send",
     "health": "node bin/nyx-baileys.js health",
     "sessions": "node bin/nyx-baileys.js sessions",
-    "cli": "node bin/nyx-baileys.js"
+    "cli": "node bin/nyx-baileys.js",
+    "wizard": "flux"
   },
   "keywords": [
     "whatsapp",
@@ -77,9 +81,11 @@
   ],
   "license": "MIT",
   "devDependencies": {
+    "jsqr": "^1.4.0",
     "typescript": "^5.9.2"
   },
   "dependencies": {
+    "@inquirer/prompts": "^8.7.3",
     "@whiskeysockets/baileys": ">=7.0.0-rc.14",
     "link-preview-js": "^3.2.0"
   },

@@ -13,11 +13,26 @@
 
 import { fileURLToPath } from 'node:url';
 
-import { createNyxBot, installGracefulShutdown } from '../../dist/index.js';
+import {
+  aiGate,
+  buildFullRegistry,
+  configureAiState,
+  createNyxBot,
+  fluxMenuTap,
+  installGracefulShutdown,
+  registryToSpecs,
+  resolveFeatureMenuSelection,
+  sendFeatureExample,
+} from '../../dist/index.js';
 
 import config from './config.mjs';
 
 const commandsDir = fileURLToPath(new URL('./commands', import.meta.url));
+
+// One registry feeds both the command specs and the catalogue tap router, so a
+// tap can never name a family the specs do not have.
+const fluxRegistry = buildFullRegistry();
+configureAiState(config.sessionDir);
 
 const bot = await createNyxBot({
   sessionDir: config.sessionDir,
@@ -26,6 +41,8 @@ const bot = await createNyxBot({
   groups: config.groups,
   logLevel: config.logLevel,
   messages: config.messages,
+  commands: registryToSpecs(fluxRegistry),
+  plugins: [fluxMenuTap(fluxRegistry), aiGate({ owners: config.owners, prefix: config.prefix, sessionDir: config.sessionDir })],
   commandsDir,
   loader: {
     onError: (err, file) => console.error(`[loader] skipped ${file}: ${err.message}`),
@@ -33,8 +50,37 @@ const bot = await createNyxBot({
 });
 
 console.log(`online as ${bot.sock.user?.id ?? 'unknown'}`);
-console.log(`${bot.loaded.length} commands loaded from ${commandsDir}`);
+console.log(`${bot.commands.list().length} commands live (${fluxRegistry.size} registry + ${bot.loaded.length - fluxRegistry.size} from ${commandsDir})`);
 console.log(`prefix "${config.prefix}" — try ${config.prefix}menu`);
+
+/**
+ * Menu taps.
+ *
+ * The reference bot (`refs/atex-ovi__wabase-button/src/handler.js`) reads the
+ * selection out of `interactiveResponseMessage.nativeFlowResponseMessage.paramsJson`
+ * and switches on the row id. This is the same read, minus the switch: the id
+ * resolves to a feature, and the feature knows how to send itself.
+ *
+ * `resolveFeatureMenuSelection` returns null for anything that is not one of our
+ * rows, so an unrelated interactive message is ignored rather than mis-dispatched.
+ */
+bot.sock.ev.on('messages.upsert', async ({ messages }) => {
+  const msg = messages?.[0];
+  const raw = msg?.message?.interactiveResponseMessage?.nativeFlowResponseMessage?.paramsJson;
+  if (!raw) return;
+
+  let id = null;
+  try {
+    id = JSON.parse(raw)?.id ?? null;
+  } catch {
+    return; // a malformed echo drops one tap, it does not take the bot down
+  }
+
+  const feature = resolveFeatureMenuSelection(id);
+  if (!feature) return;
+
+  await sendFeatureExample(bot.sock, msg.key.remoteJid, feature.id);
+});
 
 // Stop cleanly on Ctrl-C: unwind patches, close the socket.
 installGracefulShutdown(bot, (code) => process.exit(code));

@@ -124,11 +124,38 @@ test('the reporting secret is attached', async () => {
   assert.deepEqual(inner.deviceListMetadata, {});
 });
 
-test('no additionalNodes — this shape must not carry a quick_reply flow name', async () => {
+test('the biz/bot stanza nodes ride with the menu', async () => {
+  // This file previously asserted their *absence*, reasoning that the nodes are
+  // a quick_reply concern. The reference implementation builds them for every
+  // interactive send, so they are required here too.
   const { sock, relayed } = rig();
   await sendCategoryMenu(sock, JID, CATEGORIES);
-  assert.equal(relayed[0].opts.additionalNodes, undefined,
-    'attaching biz/bot nodes here would label a single_select as quick_reply');
+
+  const nodes = relayed[0].opts.additionalNodes;
+  assert.ok(Array.isArray(nodes), 'the menu must carry additionalNodes');
+  assert.equal(nodes.length, 2, 'biz + bot');
+
+  const [biz, bot] = nodes;
+  assert.equal(biz.tag, 'biz');
+  assert.equal(biz.content[0].tag, 'interactive');
+  assert.equal(biz.content[0].attrs.type, 'native_flow');
+  assert.equal(biz.content[0].content[0].tag, 'native_flow');
+  // The stanza name is the fixed literal `mixed`, NOT the button being sent.
+  // This assertion used to require `single_select`; that mismatch with the
+  // reference implementation is why the menu arrived without its button.
+  assert.equal(biz.content[0].content[0].attrs.name, 'mixed');
+  assert.equal(biz.content[0].content[0].attrs.v, '9');
+
+  assert.equal(bot.tag, 'bot');
+  assert.equal(bot.attrs.biz_bot, '1');
+});
+
+test('a group menu drops the bot node — it is 1:1 only', async () => {
+  const { sock, relayed } = rig();
+  await sendCategoryMenu(sock, '120363000000000000@g.us', CATEGORIES);
+
+  const tags = relayed[0].opts.additionalNodes.map((n) => n.tag);
+  assert.deepEqual(tags, ['biz']);
 });
 
 test('the menu goes through relayMessage, not sendMessage', async () => {
@@ -224,4 +251,22 @@ test('the built message is real protobuf, not a loose object', async () => {
   const im = back.viewOnceMessage.message.interactiveMessage;
   assert.ok(im, 'must survive a protobuf round trip');
   assert.equal(im.nativeFlowMessage.buttons[0].name, 'single_select');
+});
+test('a plain button tap reads as a selection too', () => {
+  // quick_reply can come back either way depending on how the client renders
+  // it. Reading only the native-flow shape silently dropped half the taps.
+  assert.equal(
+    readMenuSelection({ buttonsResponseMessage: { selectedButtonId: 'flux:page:timezone:2' } }),
+    'flux:page:timezone:2',
+  );
+  assert.equal(readMenuSelection({ buttonsResponseMessage: { selectedButtonId: '' } }), null);
+  assert.equal(readMenuSelection({ buttonsResponseMessage: null }), null);
+  // Native flow still wins when both shapes are somehow present.
+  assert.equal(
+    readMenuSelection({
+      interactiveResponseMessage: { nativeFlowResponseMessage: { paramsJson: '{"id":"native:1"}' } },
+      buttonsResponseMessage: { selectedButtonId: 'plain:1' },
+    }),
+    'native:1',
+  );
 });

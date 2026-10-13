@@ -21,6 +21,10 @@
 
 import { createHash } from 'node:crypto';
 
+// Type-only, so this adds no runtime edge: `vision.ts` needs the parts shape and
+// `context.ts` needs to name it, and neither should drag the other's code in.
+import type { ContentPart } from './vision.js';
+
 /* ════════════════════════════════════════════════════════════════════════
    Token accounting
    ════════════════════════════════════════════════════════════════════════ */
@@ -46,12 +50,28 @@ export function estimateTokens(text: string): number {
   return Math.ceil(cjk * 1.0 + rest / 4);
 }
 
+/**
+ * Token estimate for a message body, whether text or parts.
+ *
+ * An image part is pixels, not prose. A flat allowance keeps the budget honest
+ * without pretending to count tokens that only the provider can see.
+ */
+export function estimateContentTokens(content: MessageContent): number {
+  if (typeof content === 'string') return estimateTokens(content);
+  let total = 0;
+  for (const part of content) {
+    if (part.type === 'text' && part.text) total += estimateTokens(part.text);
+    else if (part.type === 'image_url') total += 512;
+  }
+  return total;
+}
+
 /** Token cost of a whole message array. */
 export function estimateMessages(
   messages: readonly ChatMessage[],
 ): number {
   return messages.reduce(
-    (sum, m) => sum + estimateTokens(m.content) + 4, // +4 for role/framing tokens
+    (sum, m) => sum + estimateContentTokens(m.content) + 4, // +4 for role/framing tokens
     0,
   );
 }
@@ -62,9 +82,20 @@ export function estimateMessages(
 
 export type ChatRole = 'system' | 'user' | 'assistant';
 
+/**
+ * Message content: plain text, or provider content parts for a multimodal turn.
+ *
+ * A parts array is passed through to an OpenAI-compatible provider verbatim and
+ * flattened to text for a provider that cannot take images. The type lived as
+ * `string` until a vision turn was wrapped in `String(...)`, which turned a
+ * `ContentPart[]` into the literal string `"[object Object]"` before it reached
+ * the provider.
+ */
+export type MessageContent = string | ContentPart[];
+
 export interface ChatMessage {
   role: ChatRole;
-  content: string;
+  content: MessageContent;
   /** Epoch ms. Set automatically by `remember()`. */
   at?: number;
   /** Where this turn came from — a jid, a channel name. */
@@ -377,7 +408,7 @@ export function fitWindow(
   // Walk backwards so the most recent turns are kept preferentially, then stop.
   const keptReversed: ChatMessage[] = [];
   for (let i = rest.length - 1; i >= 0; i -= 1) {
-    const cost = estimateTokens(rest[i]?.content ?? '') + 4;
+    const cost = estimateContentTokens(rest[i]?.content ?? '') + 4;
     if (used + cost > budget && keptReversed.length >= minKeep) break;
     used += cost;
     keptReversed.unshift(rest[i] as ChatMessage);
@@ -434,7 +465,7 @@ export function heuristicDigest(messages: readonly ChatMessage[]): Digest {
   const question = /\?\s*$/;
 
   for (const message of messages) {
-    if (message.role !== 'user') continue;
+    if (message.role !== 'user' || typeof message.content !== 'string') continue;
 
     for (const rawLine of message.content.split('\n')) {
       const line = rawLine.trim();
@@ -446,7 +477,8 @@ export function heuristicDigest(messages: readonly ChatMessage[]): Digest {
     }
   }
 
-  const first = messages.find((m) => m.role === 'user')?.content ?? '';
+  const firstUser = messages.find((m) => m.role === 'user')?.content;
+  const first = typeof firstUser === 'string' ? firstUser : '';
   const topic = first.split(/[.!?\n]/)[0]?.slice(0, 60).trim() ?? 'conversation';
 
   return {
@@ -545,7 +577,8 @@ export class Conversations {
     // Recall against the last user turn so the relevant facts come first, but
     // fall back to the full store when the query matches nothing — otherwise a
     // chat whose latest message is "ok" loses every fact it has.
-    const lastUser = [...chat.messages].reverse().find((m) => m.role === 'user')?.content ?? '';
+    const lastUserMsg = [...chat.messages].reverse().find((m) => m.role === 'user');
+    const lastUser = typeof lastUserMsg?.content === 'string' ? lastUserMsg.content : '';
     const memoryBlock = chat.memory.render(lastUser)
       || (chat.memory.size > 0 ? chat.memory.render() : '');
 
@@ -560,7 +593,7 @@ export class Conversations {
     // counts against the budget. A long memory block must not be able to crowd
     // out the conversation — cap it so facts degrade to fewer, not to none.
     const capped: ChatMessage[] = withSystem.map((m) => (
-      m.role === 'system' && m.content.length > 4_000
+      m.role === 'system' && typeof m.content === 'string' && m.content.length > 4_000
         ? { ...m, content: `${m.content.slice(0, 4_000)}\n(facts truncated)` }
         : m
     ));
