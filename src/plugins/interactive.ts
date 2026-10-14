@@ -299,12 +299,15 @@ interface FlatButton {
 /**
  * Wrap a caller-supplied payload in the envelope rc14 will actually serialise.
  *
- * Two things are required and neither is optional in practice:
+ * `messageContextInfo.deviceListMetadata` with `deviceListMetadataVersion: 2` goes
+ * on the outer message, which is where the client reads it.
  *
- *  - The `viewOnceMessage` wrapper. `generateWAMessageFromContent` passes the
- *    *original* object to `WAProto.Message.create` (`Utils/messages.js:603`), so
- *    the wrapper survives, and without it the stanza does not render.
- *  - `messageContextInfo.deviceListMetadata` with `deviceListMetadataVersion: 2`.
+ * There is deliberately NO `viewOnceMessage` wrapper here. The comment that used
+ * to claim rc14 "only serialises interactive messages in this envelope" was
+ * inherited from a reference bot and never checked. Checked: rc14 serialises a
+ * bare `interactiveMessage` and `getContentType` reports it correctly. The
+ * wrapper was in fact what stopped interactive stanzas rendering — the relay
+ * returned a clean ID and the recipient saw nothing.
  *
  * The inner message is built with `proto.Message.InteractiveMessage.fromObject`
  * so nested shapes — notably a button's `{ displayText }` — are materialised as
@@ -317,14 +320,8 @@ export function wrapInteractive(
   rest: Record<string, unknown> = {},
 ): Record<string, unknown> {
   return {
-    viewOnceMessage: {
-      message: {
-        messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
-        interactiveMessage: proto.Message.InteractiveMessage.fromObject(
-          toInteractiveInner(key, payload, rest),
-        ),
-      },
-    },
+    messageContextInfo: { deviceListMetadata: {}, deviceListMetadataVersion: 2 },
+    interactiveMessage: proto.Message.InteractiveMessage.fromObject(toInteractiveInner(key, payload, rest)),
   };
 }
 

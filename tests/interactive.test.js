@@ -111,7 +111,7 @@ test('a list message is built and relayed rather than rejected', async () => {
  * exists to catch.
  */
 function flowOf(message) {
-  const interactive = message?.viewOnceMessage?.message?.interactiveMessage;
+  const interactive = message?.interactiveMessage;
   assert(interactive, `no interactiveMessage in the envelope: ${JSON.stringify(message)}`);
   const buttons = interactive.nativeFlowMessage?.buttons;
   assert(Array.isArray(buttons), `no nativeFlowMessage.buttons: ${JSON.stringify(interactive)}`);
@@ -182,7 +182,7 @@ test('the message is keyed to the chat and marked as ours', async () => {
   assert.equal(result.key.remoteJid, GROUP, 'keyed to the chat it was sent to');
   assert.equal(result.key.fromMe, true, 'an outgoing message must be marked fromMe');
   assert.equal(relayed[0].opts.messageId, result.key.id, 'the id sent is the id returned');
-  assert(relayed[0].message.viewOnceMessage, 'the inner message is wrapped, not bare');
+  assert(relayed[0].message.interactiveMessage, 'the interactive message is the payload');
 });
 
 /* ── the stanza nodes, without which nothing renders ─────────────────── */
@@ -430,7 +430,7 @@ function stanzaFlow(entry) {
 
 /** The inner interactive message of a relayed send. */
 function innerOf(entry) {
-  return entry.message.viewOnceMessage.message.interactiveMessage;
+  return entry.message.interactiveMessage;
 }
 
 test('interactiveButtons is recognised as an interactive key', () => {
@@ -578,11 +578,11 @@ test('an interactive send carrying edit is wrapped as a protocolMessage edit', a
   assert.equal(outgoing.protocolMessage.type, 14, 'MESSAGE_EDIT');
   assert.ok(outgoing.protocolMessage.editedMessage, 'the edited content rides inside');
   assert.equal(
-    outgoing.protocolMessage.editedMessage.viewOnceMessage.message.interactiveMessage.body.text,
+    outgoing.protocolMessage.editedMessage.interactiveMessage.body.text,
     'page two',
   );
   const button = outgoing.protocolMessage.editedMessage
-    .viewOnceMessage.message.interactiveMessage.nativeFlowMessage.buttons[0];
+    .interactiveMessage.nativeFlowMessage.buttons[0];
   assert.equal(button.name, 'quick_reply');
 });
 
@@ -593,5 +593,5 @@ test('an interactive send without edit stays a plain interactive message', async
     interactiveButtons: [{ name: 'quick_reply', buttonParamsJson: JSON.stringify({ display_text: 'Next', id: 'x' }) }],
   });
   assert.ok(!relayed[0].message.protocolMessage, 'a normal send is not wrapped as an edit');
-  assert.ok(relayed[0].message.viewOnceMessage, 'a normal send is not wrapped');
+  assert.ok(relayed[0].message.interactiveMessage, 'a normal send is not an edit');
 });

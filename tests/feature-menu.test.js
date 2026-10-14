@@ -70,7 +70,7 @@ function rig() {
 
 /** Pull the opaque single_select payload back out of the built message. */
 function paramsOf(entry) {
-  const im = entry.message.viewOnceMessage.message.interactiveMessage;
+  const im = entry.message.interactiveMessage;
   return {
     buttonName: im.nativeFlowMessage.buttons[0].name,
     payload: JSON.parse(im.nativeFlowMessage.buttons[0].buttonParamsJson),
@@ -447,7 +447,7 @@ test('the built menu survives a protobuf round trip', async () => {
 
   const bytes = proto.Message.encode(relayed[0].message).finish();
   const back = proto.Message.toObject(proto.Message.decode(bytes));
-  const im = back.viewOnceMessage.message.interactiveMessage;
+  const im = back.interactiveMessage;
   assert.ok(im, 'the menu must be real protobuf, not a loose object');
   assert.equal(im.nativeFlowMessage.buttons[0].name, 'single_select');
 });
@@ -561,7 +561,7 @@ test('a feature example is relayed with the fixed stanza name, not its flow', as
     relayed.length = 0;
     await sendFeatureExample(sock, JID, feature.id);
 
-    const inner = relayed[0].message.viewOnceMessage.message.interactiveMessage;
+    const inner = relayed[0].message.interactiveMessage;
     // The button still declares the real flow — that half is the caller's data.
     assert.equal(inner.nativeFlowMessage.buttons[0].name, feature.flow);
 

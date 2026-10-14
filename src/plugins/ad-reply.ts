@@ -3,6 +3,7 @@ import { patch } from '../core/intercept.js';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isAdReplyEnabled } from '../toolkit/adreply-state.js';
 
 /** The pre-compressed card artwork, shipped next to the compiled plugin. */
 function assetPath(): string {
@@ -10,6 +11,13 @@ function assetPath(): string {
 }
 
 export interface AdReplyOptions {
+  /**
+   * Honour the persisted `flux adreply on` switch. On by default, which means the
+   * card is OFF for anyone who has not run the command. Pass `false` to stamp the
+   * card unconditionally — that is what the unit tests use, so they do not depend
+   * on a session file existing.
+   */
+  stateful?: boolean;
   /** Card headline. Keep it short — it renders on one line above the thumbnail. */
   displayName?: string;
   /** Card subline. */
@@ -46,6 +54,10 @@ export function adReply(options: AdReplyOptions = {}): Plugin {
     order: 13,
     apply({ sock, onDispose }: PluginContext) {
       if (options.enabled === false) return;
+      // The switch is per-session and owner-controlled. Reading it once at apply
+      // time means `flux adreply on` needs a restart to take effect — that is the
+      // honest trade for not paying a file read on every single outgoing message.
+      if (options.stateful !== false && !isAdReplyEnabled()) return;
 
       const mediaUrl = options.mediaUrl ?? 'https://videotourl.com/videos/1791285535994-f54d2fe5-3ab1-416b-ba0d-c9fcde4c3e3a.mp4';
       // The source `thumbnailUrl` points at is 5504x3072 and 22MB, which is a

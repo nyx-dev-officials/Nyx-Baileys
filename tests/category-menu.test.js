@@ -52,14 +52,14 @@ function rig() {
 
 /** Dig the opaque payload back out of the built message. */
 function paramsOf(entry) {
-  const im = entry.message.viewOnceMessage.message.interactiveMessage;
+  const im = entry.message.interactiveMessage;
   return {
     buttonName: im.nativeFlowMessage.buttons[0].name,
     payload: JSON.parse(im.nativeFlowMessage.buttons[0].buttonParamsJson),
     messageVersion: im.nativeFlowMessage.messageVersion,
     body: im.body.text,
     footer: im.footer.text,
-    contextInfo: entry.message.viewOnceMessage.message.messageContextInfo,
+    contextInfo: entry.message.messageContextInfo,
   };
 }
 
@@ -99,20 +99,28 @@ test('an omitted description is left out rather than sent as undefined', async (
   assert.equal('description' in voice, false);
 });
 
-test('it travels in a viewOnceMessage envelope', async () => {
+test('it travels as a bare interactive message, not a view-once envelope', async () => {
   const { sock, relayed } = rig();
   await sendCategoryMenu(sock, JID, CATEGORIES);
-  assert.ok(relayed[0].message.viewOnceMessage,
-    'rc14 only serialises interactive messages in this envelope');
+
+  // This used to assert the opposite — that "rc14 only serialises interactive
+  // messages in this envelope". That claim was inherited from the reference bot
+  // and never checked. Checked: `generateWAMessageFromContent` serialises a bare
+  // `interactiveMessage` and `getContentType` reports it. Wrapping it in
+  // `viewOnceMessage` is what stopped the sheet rendering — the relay returned a
+  // clean ID and the recipient saw nothing.
+  // Protobuf defaults the absent field to null, so check for falsy rather than
+  // for the exact `undefined` a plain object would have given.
+  assert.equal(relayed[0].message.viewOnceMessage, null, 'no view-once envelope');
+  assert.ok(relayed[0].message.interactiveMessage, 'the interactive message is the payload');
 });
 
 test('the reporting secret is attached', async () => {
   const { sock, relayed } = rig();
   await sendCategoryMenu(sock, JID, CATEGORIES);
 
-  // On the *outer* message, alongside the viewOnce wrapper — not the inner one.
-  // `generateWAMessageContent` attaches it at the top level, and this path
-  // bypasses that function, so it is supplied in the same place.
+  // On the outer message. `generateWAMessageContent` attaches it at the top level,
+  // and this path bypasses that function, so it is supplied in the same place.
   assert.ok(relayed[0].message.messageContextInfo?.messageSecret,
     'generateWAMessageContent is bypassed, so supply the secret here');
   assert.equal(relayed[0].message.messageContextInfo.messageSecret.length, 32);
@@ -248,7 +256,7 @@ test('the built message is real protobuf, not a loose object', async () => {
 
   const bytes = proto.Message.encode(relayed[0].message).finish();
   const back = proto.Message.toObject(proto.Message.decode(bytes));
-  const im = back.viewOnceMessage.message.interactiveMessage;
+  const im = back.interactiveMessage;
   assert.ok(im, 'must survive a protobuf round trip');
   assert.equal(im.nativeFlowMessage.buttons[0].name, 'single_select');
 });

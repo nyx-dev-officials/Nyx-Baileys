@@ -146,27 +146,23 @@ export async function sendCategoryMenu(
     }),
   });
 
+  // Sent as a plain interactive message, NOT wrapped in `viewOnceMessage`.
+  // The reference bots wrap theirs, and that is where this came from — but a
+  // native flow inside a view-once wrapper never rendered on this account: the
+  // relay returned a clean ID and the recipient saw nothing at all. The wrapper
+  // buys nothing here and cost the entire menu.
   const full = generateWAMessageFromContent(
     jid,
-    {
-      viewOnceMessage: {
-        message: {
-          messageContextInfo: {
-            deviceListMetadata: {},
-            deviceListMetadataVersion: 2,
-          },
-          interactiveMessage,
-        },
-      },
-    },
+    { interactiveMessage },
     { userJid: (sock as unknown as { user?: { id?: string } }).user?.id } as never,
   );
 
   // `generateWAMessageContent` attaches a reporting secret to every message it
-  // builds. This path bypasses that function, so it is supplied here. Not the
-  // reason anything renders — the payload shape is — but the server expects the
-  // field to be present.
+  // builds. This path bypasses that function, so it is supplied here, alongside
+  // the device-list metadata the client reads to present the sheet.
   (full.message as { messageContextInfo?: Record<string, unknown> }).messageContextInfo = {
+    deviceListMetadata: {},
+    deviceListMetadataVersion: 2,
     messageSecret: randomBytes(32),
   };
 
