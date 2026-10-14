@@ -3,7 +3,6 @@ import { patch } from '../core/intercept.js';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { isAdReplyEnabled } from '../toolkit/adreply-state.js';
 
 /** The pre-compressed card artwork, shipped next to the compiled plugin. */
 function assetPath(): string {
@@ -37,16 +36,51 @@ export interface AdReplyOptions {
 }
 
 /**
- * Attach a native `externalAdReply` ad card to every outgoing message.
+ * Build the ad card.
  *
- * This is the pattern the reference bots reach for by monkey-patching their reply
- * helper. Doing it as a plugin instead means it is removable, opt-in, and does not
- * fire on sends that deliberately carry their own context.
+ * Exported so `flux adreply` can send one message carrying it without the card
+ * being attached to everything else — the plugin and the command share this, so
+ * what you preview is exactly what the plugin would stamp.
+ */
+export function adReplyCard(options: AdReplyOptions = {}): Record<string, unknown> {
+  const mediaUrl = options.mediaUrl ?? 'https://videotourl.com/videos/1791285535994-f54d2fe5-3ab1-416b-ba0d-c9fcde4c3e3a.mp4';
+  // The source `thumbnailUrl` points at is 5504x3072 and 22MB, which is a
+  // thumbnail a card fetcher will time out on. The same artwork, cropped to
+  // 1280x720 and re-encoded, ships alongside the build as a 144KB buffer:
+  // embedded, so the card renders without a remote round-trip. Falls back to the
+  // URL if the asset is missing rather than sending no image at all.
+  let embedded: Uint8Array | undefined;
+  try {
+    embedded = new Uint8Array(readFileSync(assetPath()));
+  } catch {
+    embedded = undefined;
+  }
+  return {
+    title: options.displayName ?? '𝓝𝔂𝔁 • 𝓕𝓵𝓾𝔁',
+    body: options.body ?? 'whatsapp -bot  •  nyx-devs',
+    sourceUrl: options.sourceUrl ?? 'https://nyx-devs.vercel.app',
+    mediaUrl,
+    thumbnailUrl: options.thumbnailUrl ?? 'https://i.im.ge/QQqwVKC/Blackhole.png',
+    ...(embedded ? { thumbnail: embedded } : {}),
+    // 1 = IMAGE, 2 = VIDEO. This has to agree with `mediaUrl` or the client is
+    // asked to render an mp4 as a still and shows nothing. Derived from the URL
+    // rather than pinned, so swapping `mediaUrl` cannot desync them.
+    mediaType: /\.mp4(\?|$)/i.test(String(mediaUrl)) ? 2 : 1,
+    renderLargerThumbnail: true,
+    showAdAttribution: true,
+  };
+}
+
+/**
+ * Attach a native `externalAdReply` ad card to every outgoing message.
  *
  * Field names are restricted to ones that actually exist on
  * `proto.ContextInfo.ExternalAdReplyInfo` in rc14 — verified against
  * `WAProto/index.d.ts`. Inventing a field here would be silently dropped by
  * protobuf, which is how most of these cards end up rendering with only a title.
+ *
+ * Not in the default chain: the card was never observed rendering, and putting an
+ * unverified payload on every outgoing message is not a trade worth making blind.
  */
 export function adReply(options: AdReplyOptions = {}): Plugin {
   return {
@@ -54,37 +88,7 @@ export function adReply(options: AdReplyOptions = {}): Plugin {
     order: 13,
     apply({ sock, onDispose }: PluginContext) {
       if (options.enabled === false) return;
-      // The switch is per-session and owner-controlled. Reading it once at apply
-      // time means `flux adreply on` needs a restart to take effect — that is the
-      // honest trade for not paying a file read on every single outgoing message.
-      if (options.stateful !== false && !isAdReplyEnabled()) return;
-
-      const mediaUrl = options.mediaUrl ?? 'https://videotourl.com/videos/1791285535994-f54d2fe5-3ab1-416b-ba0d-c9fcde4c3e3a.mp4';
-      // The source `thumbnailUrl` points at is 5504x3072 and 22MB, which is a
-      // thumbnail WhatsApp's card fetcher will time out on. The same artwork,
-      // cropped to 1280x720 and re-encoded, ships alongside the build as a 144KB
-      // buffer: embedded, so the card renders without a remote round-trip. Falls
-      // back to the URL if the asset is missing rather than sending no image.
-      let embedded: Uint8Array | undefined;
-      try {
-        embedded = new Uint8Array(readFileSync(assetPath()));
-      } catch {
-        embedded = undefined;
-      }
-      const externalAdReply = {
-        title: options.displayName ?? '𝓝𝔂𝔁 • 𝓕𝓵𝓾𝔁',
-        body: options.body ?? 'whatsapp -bot  •  nyx-devs',
-        sourceUrl: options.sourceUrl ?? 'https://nyx-devs.vercel.app',
-        mediaUrl,
-        thumbnailUrl: options.thumbnailUrl ?? 'https://i.im.ge/QQqwVKC/Blackhole.png',
-        ...(embedded ? { thumbnail: embedded } : {}),
-        // 1 = IMAGE, 2 = VIDEO. This has to agree with `mediaUrl` or the client
-        // is asked to render an mp4 as a still and shows nothing. Derived from the
-        // URL rather than pinned, so swapping `mediaUrl` cannot desync them.
-        mediaType: /\.mp4(\?|$)/i.test(String(mediaUrl)) ? 2 : 1,
-        renderLargerThumbnail: true,
-        showAdAttribution: true,
-      };
+      const externalAdReply = adReplyCard(options);
 
       const handle = patch(sock as never, 'sendMessage', ((
         original: (...args: unknown[]) => unknown,

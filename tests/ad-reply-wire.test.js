@@ -24,7 +24,7 @@ async function buildWithPlugin(content) {
     },
   };
   const undos = [];
-  adReply({ stateful: false }).apply({ sock, onDispose: (f) => undos.push(f), log: { debug() {}, info() {}, warn() {}, error() {} } });
+  adReply().apply({ sock, onDispose: (f) => undos.push(f), log: { debug() {}, info() {}, warn() {}, error() {} } });
   await sock.sendMessage('15550001111@s.whatsapp.net', content);
   undos.forEach((f) => f());
   return captured;

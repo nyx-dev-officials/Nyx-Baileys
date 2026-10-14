@@ -185,8 +185,7 @@ export type {
   QuotedMessage,
 } from './core/mention.js';
 
-export { adReply } from './plugins/ad-reply.js';
-export { configureAdReplyState, isAdReplyEnabled, setAdReplyEnabled } from './toolkit/adreply-state.js';
+export { adReply, adReplyCard } from './plugins/ad-reply.js';
 export type { AdReplyOptions } from './plugins/ad-reply.js';
 export { antiSpam } from './plugins/antiSpam.js';
 export { stealth } from './plugins/stealth.js';

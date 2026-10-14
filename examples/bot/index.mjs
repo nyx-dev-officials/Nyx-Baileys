@@ -14,7 +14,6 @@
 import { fileURLToPath } from 'node:url';
 
 import {
-  configureAdReplyState,
   aiGate,
   buildFullRegistry,
   configureAiState,
@@ -34,7 +33,6 @@ const commandsDir = fileURLToPath(new URL('./commands', import.meta.url));
 // tap can never name a family the specs do not have.
 const fluxRegistry = buildFullRegistry();
 configureAiState(config.sessionDir);
-configureAdReplyState(config.sessionDir);
 
 const bot = await createNyxBot({
   sessionDir: config.sessionDir,
